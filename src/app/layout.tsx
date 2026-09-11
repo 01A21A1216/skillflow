@@ -56,11 +56,17 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   };
 
   return (
+    // `html` is suppressed because THEME_BOOTSTRAP adds the `dark` class to
+    // documentElement before React hydrates — a mismatch we create on purpose.
+    // `body` is suppressed because extensions (Grammarly, password managers,
+    // translation tools) inject attributes onto it before hydration. Both flags
+    // are shallow: they cover only that element's own attributes and text, not
+    // the subtree, so real hydration bugs inside the app still surface.
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
-      <body>
+      <body suppressHydrationWarning>
         <ToastProvider>
           <AppShell actor={actor} people={people} counts={counts}>
             {children}
