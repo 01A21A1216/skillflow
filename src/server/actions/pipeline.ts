@@ -5,10 +5,20 @@ import { and, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { candidates, notes, requisitions, stageEvents, submissions } from "@/db/schema";
+import type { User } from "@/db/schema";
 import { STAGE, stageIndex, type Stage } from "@/lib/domain";
 import { addToPipelineSchema, moveStageSchema, rejectSchema, reopenSchema } from "@/lib/validation";
-import { currentUser } from "@/server/session";
-import { fail, logActivity, newId, parseForm, succeed, type ActionState } from "./shared";
+import { canTouchRequisition } from "@/server/authz";
+import {
+  denied,
+  fail,
+  guarded,
+  logActivity,
+  newId,
+  parseForm,
+  succeed,
+  type ActionState,
+} from "./shared";
 
 function revalidateEverywhere(requisitionId?: string, candidateId?: string) {
   revalidatePath("/");
@@ -45,7 +55,7 @@ function syncRequisitionFill(requisitionId: string) {
     .run();
 }
 
-export async function addToPipeline(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function addToPipelineImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(addToPipelineSchema, formData);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
@@ -54,6 +64,7 @@ export async function addToPipeline(_prev: ActionState, formData: FormData): Pro
   const req = db.select().from(requisitions).where(eq(requisitions.id, input.requisitionId)).get();
   if (!candidate) return fail("That candidate no longer exists.");
   if (!req) return fail("That requisition no longer exists.");
+  if (!canTouchRequisition(actor, req.id)) return denied("that requisition");
 
   const duplicate = db
     .select()
@@ -69,7 +80,6 @@ export async function addToPipeline(_prev: ActionState, formData: FormData): Pro
     });
   }
 
-  const actor = await currentUser();
   const id = newId("sub");
   const now = new Date();
   const stage = input.stage as Stage;
@@ -143,7 +153,7 @@ export async function addToPipeline(_prev: ActionState, formData: FormData): Pro
   return succeed(`Added to ${req.code}`, id);
 }
 
-export async function moveStage(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function moveStageImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(moveStageSchema, formData);
   if (!parsed.success) return parsed.state;
   const { submissionId, stage, note } = parsed.data;
@@ -166,7 +176,6 @@ export async function moveStage(_prev: ActionState, formData: FormData): Promise
   const target = stage as Stage;
   const hiring = target === "hired";
   const now = new Date();
-  const actor = await currentUser();
 
   db.transaction((tx) => {
     tx.update(submissions)
@@ -224,7 +233,7 @@ export async function moveStage(_prev: ActionState, formData: FormData): Promise
   );
 }
 
-export async function rejectSubmission(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(rejectSchema, formData);
   if (!parsed.success) return parsed.state;
   const { submissionId, outcome, reason, note } = parsed.data;
@@ -241,7 +250,6 @@ export async function rejectSubmission(_prev: ActionState, formData: FormData): 
   const { submission, candidate, requisition } = row;
   if (submission.status !== "active") return fail("This candidate is already closed out.");
 
-  const actor = await currentUser();
   const now = new Date();
 
   db.transaction((tx) => {
@@ -299,7 +307,7 @@ export async function rejectSubmission(_prev: ActionState, formData: FormData): 
   return succeed(outcome === "withdrawn" ? "Marked as withdrawn" : "Candidate closed out");
 }
 
-export async function reopenSubmission(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(reopenSchema, formData);
   if (!parsed.success) return parsed.state;
   const { submissionId, stage } = parsed.data;
@@ -316,7 +324,6 @@ export async function reopenSubmission(_prev: ActionState, formData: FormData): 
   const { submission, candidate, requisition } = row;
   if (submission.status === "active") return fail("This candidate is already active.");
 
-  const actor = await currentUser();
   const now = new Date();
   const wasHired = submission.status === "hired";
 
@@ -373,3 +380,13 @@ export async function moveStageById(submissionId: string, stage: Stage) {
   formData.set("stage", stage);
   return moveStage({ ok: false }, formData);
 }
+
+
+/* ---- Guarded exports -------------------------------------------- *
+ * Each mutation is only reachable through its permission check.
+ * ------------------------------------------------------------------ */
+
+export const addToPipeline = guarded("submission.create", addToPipelineImpl);
+export const moveStage = guarded("submission.move", moveStageImpl);
+export const rejectSubmission = guarded("submission.close", rejectSubmissionImpl);
+export const reopenSubmission = guarded("submission.move", reopenSubmissionImpl);

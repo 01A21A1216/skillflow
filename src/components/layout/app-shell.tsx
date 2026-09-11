@@ -22,7 +22,7 @@ import type { User } from "@/db/schema";
 import { cn } from "@/lib/utils";
 import { setLocalFlag, useLocalFlag } from "@/lib/browser-store";
 import { Button } from "@/components/ui/button";
-import { ActorMenu } from "./actor-menu";
+import { UserMenu } from "./user-menu";
 import { GlobalSearch } from "./global-search";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -35,32 +35,63 @@ export interface NavCounts {
   offers: number;
 }
 
+/**
+ * Navigation is permission-driven: a link the actor cannot use is not
+ * rendered. `anyOf` means "show if the actor holds any of these", which keeps
+ * the scoped variants (view.all / view.assigned) from needing special cases.
+ */
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
-  { href: "/requisitions", label: "Requisitions", icon: Briefcase, count: "requisitions" as const },
-  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare, count: "pipeline" as const },
-  { href: "/candidates", label: "Candidates", icon: Users },
-  { href: "/interviews", label: "Interviews", icon: CalendarDays, count: "interviews" as const },
-  { href: "/offers", label: "Offers", icon: FileSignature, count: "offers" as const },
+  {
+    href: "/requisitions",
+    label: "Requisitions",
+    icon: Briefcase,
+    count: "requisitions" as const,
+    anyOf: ["requisition.view.all", "requisition.view.assigned"],
+  },
+  {
+    href: "/pipeline",
+    label: "Pipeline",
+    icon: KanbanSquare,
+    count: "pipeline" as const,
+    anyOf: ["requisition.view.all", "requisition.view.assigned"],
+  },
+  {
+    href: "/candidates",
+    label: "Candidates",
+    icon: Users,
+    anyOf: ["candidate.view.all", "candidate.view.owned"],
+  },
+  {
+    href: "/interviews",
+    label: "Interviews",
+    icon: CalendarDays,
+    count: "interviews" as const,
+    anyOf: ["interview.view.all", "interview.view.own"],
+  },
+  { href: "/offers", label: "Offers", icon: FileSignature, count: "offers" as const, anyOf: ["offer.view"] },
 ];
 
 const NAV_SECONDARY = [
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/clients", label: "Client accounts", icon: Building2 },
-  { href: "/team", label: "Team", icon: UsersRound },
+  { href: "/analytics", label: "Analytics", icon: BarChart3, anyOf: ["report.view"] },
+  { href: "/clients", label: "Client accounts", icon: Building2, anyOf: ["client.view"] },
+  { href: "/team", label: "Team", icon: UsersRound, anyOf: ["team.view"] },
 ];
 
 export function AppShell({
   children,
   actor,
-  people,
+  permissions,
   counts,
 }: {
   children: ReactNode;
   actor: User;
-  people: User[];
+  permissions: string[];
   counts: NavCounts;
 }) {
+  const granted = new Set(permissions);
+  const allowed = (item: { anyOf?: string[] }) =>
+    !item.anyOf || item.anyOf.some((p) => granted.has(p));
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -80,9 +111,15 @@ export function AppShell({
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 
-  const navLink = (
-    item: { href: string; label: string; icon: typeof Briefcase; exact?: boolean; count?: keyof NavCounts },
-  ) => {
+  const navLink = (item: {
+    href: string;
+    label: string;
+    icon: typeof Briefcase;
+    exact?: boolean;
+    count?: keyof NavCounts;
+    anyOf?: string[];
+  }) => {
+    if (!allowed(item)) return null;
     const active = isActive(item.href, item.exact);
     const Icon = item.icon;
     const badge = item.count ? counts[item.count] : undefined;
@@ -167,7 +204,7 @@ export function AppShell({
           ) : null}
           {NAV.map(navLink)}
 
-          <div className="pt-4">
+          <div className={cn(NAV_SECONDARY.some(allowed) ? "pt-4" : "hidden")}>
             {!collapsed ? (
               <p className="px-2.5 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-content-subtle uppercase">
                 Insight
@@ -219,7 +256,7 @@ export function AppShell({
 
           <div className="flex shrink-0 items-center gap-1.5">
             <ThemeToggle />
-            <ActorMenu actor={actor} people={people} />
+            <UserMenu actor={actor} />
           </div>
         </header>
 

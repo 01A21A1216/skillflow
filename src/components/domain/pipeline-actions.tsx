@@ -28,9 +28,22 @@ import { OfferFormModal } from "./forms/offer-form";
 interface PipelineOptions {
   interviewers: PanelOption[];
   coordinators: PanelOption[];
+  /** What the signed-in actor may actually do from a card. */
+  capabilities: {
+    move: boolean;
+    close: boolean;
+    schedule: boolean;
+    draftOffer: boolean;
+  };
 }
 
-const OptionsContext = createContext<PipelineOptions>({ interviewers: [], coordinators: [] });
+const DEFAULT_CAPABILITIES = { move: false, close: false, schedule: false, draftOffer: false };
+
+const OptionsContext = createContext<PipelineOptions>({
+  interviewers: [],
+  coordinators: [],
+  capabilities: DEFAULT_CAPABILITIES,
+});
 
 export function PipelineOptionsProvider({
   value,
@@ -171,7 +184,12 @@ type Dialog = "move" | "reject" | "interview" | "offer" | null;
 
 export function CardActions({ card }: { card: PipelineCard }) {
   const [dialog, setDialog] = useState<Dialog>(null);
-  const { interviewers, coordinators } = usePipelineOptions();
+  const { interviewers, coordinators, capabilities } = usePipelineOptions();
+
+  // Nothing this actor can do from here — do not render a dead menu.
+  if (!capabilities.move && !capabilities.close && !capabilities.schedule && !capabilities.draftOffer) {
+    return null;
+  }
 
   return (
     <>
@@ -190,44 +208,52 @@ export function CardActions({ card }: { card: PipelineCard }) {
           {(close) => (
             <>
               <MenuLabel>{card.candidateName}</MenuLabel>
-              <MenuItem
-                icon={<ExternalLink className="size-3.5" />}
-                onClick={() => {
-                  close();
-                  setDialog("move");
-                }}
-              >
-                Move stage…
-              </MenuItem>
-              <MenuItem
-                icon={<CalendarPlus className="size-3.5" />}
-                onClick={() => {
-                  close();
-                  setDialog("interview");
-                }}
-              >
-                Schedule interview…
-              </MenuItem>
-              <MenuItem
-                icon={<FileSignature className="size-3.5" />}
-                disabled={stageIndex(card.stage) < 2 || Boolean(card.offerStatus)}
-                onClick={() => {
-                  close();
-                  setDialog("offer");
-                }}
-              >
-                {card.offerStatus ? "Offer already drafted" : "Draft offer…"}
-              </MenuItem>
-              <MenuItem
-                danger
-                icon={<UserMinus className="size-3.5" />}
-                onClick={() => {
-                  close();
-                  setDialog("reject");
-                }}
-              >
-                Close out…
-              </MenuItem>
+              {capabilities.move ? (
+                <MenuItem
+                  icon={<ExternalLink className="size-3.5" />}
+                  onClick={() => {
+                    close();
+                    setDialog("move");
+                  }}
+                >
+                  Move stage…
+                </MenuItem>
+              ) : null}
+              {capabilities.schedule ? (
+                <MenuItem
+                  icon={<CalendarPlus className="size-3.5" />}
+                  onClick={() => {
+                    close();
+                    setDialog("interview");
+                  }}
+                >
+                  Schedule interview…
+                </MenuItem>
+              ) : null}
+              {capabilities.draftOffer ? (
+                <MenuItem
+                  icon={<FileSignature className="size-3.5" />}
+                  disabled={stageIndex(card.stage) < 2 || Boolean(card.offerStatus)}
+                  onClick={() => {
+                    close();
+                    setDialog("offer");
+                  }}
+                >
+                  {card.offerStatus ? "Offer already drafted" : "Draft offer…"}
+                </MenuItem>
+              ) : null}
+              {capabilities.close ? (
+                <MenuItem
+                  danger
+                  icon={<UserMinus className="size-3.5" />}
+                  onClick={() => {
+                    close();
+                    setDialog("reject");
+                  }}
+                >
+                  Close out…
+                </MenuItem>
+              ) : null}
             </>
           )}
         </Menu>

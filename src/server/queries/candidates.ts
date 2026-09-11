@@ -18,6 +18,8 @@ import {
 } from "@/db/schema";
 import { ACTIVE_STAGES } from "@/lib/domain";
 import { daysBetween } from "@/lib/utils";
+import type { User } from "@/db/schema";
+import { redactCandidate } from "@/server/authz";
 
 export interface CandidateFilters {
   q?: string;
@@ -101,7 +103,7 @@ function submissionSummary() {
   return map;
 }
 
-export function listCandidates(filters: CandidateFilters = {}): CandidateRow[] {
+export function listCandidates(filters: CandidateFilters = {}, actor?: User): CandidateRow[] {
   const conditions = [];
 
   if (filters.q) {
@@ -171,6 +173,10 @@ export function listCandidates(filters: CandidateFilters = {}): CandidateRow[] {
     };
   });
 
+  // Contact details and compensation are stripped server-side for actors
+  // without `candidate.pii`, so the values never reach the browser at all.
+  if (actor) result = result.map((c) => redactCandidate(actor, c));
+
   if (filters.inPipeline === "yes") result = result.filter((c) => c.activeSubmissions > 0);
   if (filters.inPipeline === "no") result = result.filter((c) => c.activeSubmissions === 0);
 
@@ -187,9 +193,10 @@ export function listCandidates(filters: CandidateFilters = {}): CandidateRow[] {
   return result;
 }
 
-export function getCandidate(candidateId: string) {
-  const candidate = db.select().from(candidates).where(eq(candidates.id, candidateId)).get();
-  if (!candidate) return null;
+export function getCandidate(candidateId: string, actor?: User) {
+  const raw = db.select().from(candidates).where(eq(candidates.id, candidateId)).get();
+  if (!raw) return null;
+  const candidate = actor ? redactCandidate(actor, raw) : raw;
 
   const owner = db.select().from(users).where(eq(users.id, candidate.ownerId)).get()!;
 
@@ -301,7 +308,7 @@ export function candidateFacets() {
   const owners = db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(inArray(users.role, ["recruiter", "admin"]))
+    .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
     .orderBy(asc(users.name))
     .all();
 

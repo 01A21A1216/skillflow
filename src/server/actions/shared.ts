@@ -4,7 +4,10 @@ import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 
 import { db } from "@/db";
-import { activities } from "@/db/schema";
+import { activities, type User } from "@/db/schema";
+import type { PermissionKey } from "@/lib/permissions";
+import { ForbiddenError } from "@/server/authz";
+import { actorWithPermission } from "@/server/session";
 
 export interface ActionState {
   ok: boolean;
@@ -60,6 +63,41 @@ export function parseForm<T extends z.ZodTypeAny>(
 
 export function fail(message: string, errors?: Record<string, string>): ActionState {
   return { ok: false, message, errors };
+}
+
+/**
+ * Wrap a server action so it cannot run without the required permission.
+ *
+ * Every mutation goes through this. Putting the check inside the wrapper
+ * rather than at the top of each body means a new action cannot forget it —
+ * there is no path to the handler that skips the guard. Server actions are
+ * reachable as POST endpoints by anyone who can load the page, so the guard
+ * has to live here and not in the component that renders the button.
+ */
+export function guarded(
+  permission: PermissionKey,
+  handler: (actor: User, formData: FormData) => Promise<ActionState>,
+) {
+  return async (_prev: ActionState, formData: FormData): Promise<ActionState> => {
+    let actor: User;
+    try {
+      actor = await actorWithPermission(permission);
+    } catch (error) {
+      if (error instanceof ForbiddenError) {
+        return {
+          ok: false,
+          message: "You do not have permission to do that.",
+        };
+      }
+      throw error;
+    }
+    return handler(actor, formData);
+  };
+}
+
+/** Denial that happens after the permission check, e.g. row-level scope. */
+export function denied(what = "that record"): ActionState {
+  return { ok: false, message: `You do not have access to ${what}.` };
 }
 
 export function succeed(message: string, id?: string): ActionState {

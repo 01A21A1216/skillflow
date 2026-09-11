@@ -13,6 +13,8 @@ import {
   submissions,
   users,
 } from "@/db/schema";
+import type { User } from "@/db/schema";
+import { interviewScope } from "@/server/authz";
 
 export interface InterviewFilters {
   window?: string; // upcoming | today | week | past | all | awaiting_feedback
@@ -60,9 +62,17 @@ function startOfDay(d = new Date()) {
   return copy;
 }
 
-export function listInterviews(filters: InterviewFilters = {}): InterviewRow[] {
+export function listInterviews(
+  filters: InterviewFilters = {},
+  actor?: User,
+): InterviewRow[] {
   const now = Date.now();
   const conditions = [];
+
+  if (actor) {
+    const scope = interviewScope(actor);
+    if (scope) conditions.push(scope);
+  }
 
   switch (filters.window) {
     case "today":
@@ -198,8 +208,8 @@ export function listInterviews(filters: InterviewFilters = {}): InterviewRow[] {
 }
 
 /** Completed interviews where at least one panelist still owes feedback. */
-export function awaitingFeedback(limit?: number) {
-  const rows = listInterviews({ window: "past", status: "completed" }).filter(
+export function awaitingFeedback(limit?: number, actor?: User) {
+  const rows = listInterviews({ window: "past", status: "completed" }, actor).filter(
     (r) => r.feedbackCount < r.panelSize,
   );
   return limit ? rows.slice(0, limit) : rows;
@@ -259,7 +269,7 @@ export function interviewerOptions() {
   return db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(inArray(users.role, ["interviewer", "hiring_manager", "recruiter", "admin"]))
+    .where(inArray(users.role, ["interviewer", "hiring_manager", "recruiter", "recruitment_manager", "super_admin"]))
     .orderBy(asc(users.name))
     .all();
 }

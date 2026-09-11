@@ -352,7 +352,7 @@ export function recruiterPerformance(since?: Date): RecruiterStat[] {
   const people = db
     .select()
     .from(users)
-    .where(inArray(users.role, ["recruiter", "admin"]))
+    .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
     .all()
     .filter((u) => u.capacity > 0);
 

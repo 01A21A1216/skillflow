@@ -14,6 +14,7 @@
  *   npm run db:seed          # rebuild from scratch
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -21,6 +22,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
 import * as s from "./schema";
+import { PERMISSIONS, ROLES } from "../lib/permissions";
 import {
   AGENDA_TEMPLATES,
   CANDIDATE_COMPANIES,
@@ -137,6 +139,41 @@ function activity(
 
 const ACCENTS = ["indigo", "violet", "blue", "cyan", "emerald", "amber", "orange", "rose"];
 
+/**
+ * The seed file describes the org in plain job terms; the access model uses the
+ * seven roles from the specification. Coordinators map onto `recruiter`
+ * because scheduling and pipeline work need the same permissions — their job
+ * title still reads "Recruiting Coordinator" in the UI.
+ */
+const ROLE_FOR_SEED: Record<string, string> = {
+  admin: "super_admin",
+  recruiter: "recruiter",
+  coordinator: "recruiter",
+  hiring_manager: "hiring_manager",
+  interviewer: "interviewer",
+};
+
+/** Named people who get a more specific role than their seed category implies. */
+const ROLE_OVERRIDES: Record<string, string> = {
+  "Marcus Ellery": "recruitment_manager",
+  "Tobias Lindqvist": "sourcer",
+  "Dana Whitfield": "super_admin",
+};
+
+/**
+ * Demo password for every seeded account. Development convenience only — the
+ * login page surfaces it outside production and nowhere else.
+ */
+const DEMO_PASSWORD = "demo1234";
+
+/** scrypt, matching src/server/auth.ts. Hashed once and reused for all demo users. */
+function hashDemoPassword() {
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(DEMO_PASSWORD, salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return ["scrypt", 16384, 8, 1, salt.toString("base64"), derived.toString("base64")].join("$");
+}
+const DEMO_HASH = hashDemoPassword();
+
 for (const seed of TEAM_SEEDS) {
   const [first, last] = seed.name.split(" ");
   const joined = daysAgo(int(120, 2400));
@@ -144,7 +181,8 @@ for (const seed of TEAM_SEEDS) {
     id: id("usr"),
     name: seed.name,
     email: `${first!.toLowerCase()}.${last!.toLowerCase()}@meridiantalent.com`,
-    role: seed.role,
+    role: ROLE_OVERRIDES[seed.name] ?? ROLE_FOR_SEED[seed.role] ?? "recruiter",
+    passwordHash: DEMO_HASH,
     title: seed.title,
     department: seed.department,
     phone: `+1 (${int(201, 989)}) ${int(200, 999)}-${int(1000, 9999)}`,
@@ -157,12 +195,30 @@ for (const seed of TEAM_SEEDS) {
   });
 }
 
+users.push({
+  id: id("usr"),
+  name: "Helena Voss",
+  email: "helena.voss@meridiantalent.com",
+  role: "readonly_management",
+  title: "Chief People Officer",
+  department: "Executive",
+  phone: `+1 (${int(201, 989)}) ${int(200, 999)}-${int(1000, 9999)}`,
+  timezone: "America/New_York",
+  accent: "violet",
+  capacity: 0,
+  active: true,
+  joinedAt: isoDay(daysAgo(int(600, 2000))),
+  passwordHash: DEMO_HASH,
+  createdAt: new Date(daysAgo(int(600, 2000))),
+});
+
 const byRole = (role: string) => users.filter((u) => u.role === role);
 const recruiters = byRole("recruiter");
 const hiringManagers = byRole("hiring_manager");
-const coordinators = byRole("coordinator");
+/** Coordinators share the recruiter role; identify them by job title. */
+const coordinators = users.filter((u) => u.title!.includes("Coordinator"));
 const interviewerPool = [...byRole("interviewer"), ...hiringManagers];
-const leadership = byRole("admin");
+const leadership = [...byRole("super_admin"), ...byRole("recruitment_manager")];
 
 /* ------------------------------------------------------------------ *
  * 2. Clients
@@ -300,24 +356,20 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
   requisitions.push(row);
   reqPlans.push({ row, family, openedMs, ageDays, status });
 
-  const support = sample(
-    recruiters.filter((r) => r.id !== lead.id),
-    int(0, 2),
-  );
-  for (const u of [lead, ...support]) {
-    reqAssignees.push({
-      id: id("ras"),
-      requisitionId: row.id,
-      userId: u.id!,
-      role: u.id === lead.id ? "lead" : "support",
-    });
+  // Coordinators now carry the recruiter role, so the same person can be drawn
+  // twice for one requisition. The unique index enforces one row per member.
+  const seen = new Set<string>();
+  const addAssignee = (userId: string, role: string) => {
+    if (seen.has(userId)) return;
+    seen.add(userId);
+    reqAssignees.push({ id: id("ras"), requisitionId: row.id, userId, role });
+  };
+
+  addAssignee(lead.id!, "lead");
+  for (const u of sample(recruiters.filter((r) => r.id !== lead.id), int(0, 2))) {
+    addAssignee(u.id!, "support");
   }
-  reqAssignees.push({
-    id: id("ras"),
-    requisitionId: row.id,
-    userId: pick(coordinators).id!,
-    role: "coordinator",
-  });
+  addAssignee(pick(coordinators).id!, "coordinator");
 
   activity(
     "requisition",
@@ -1052,7 +1104,33 @@ function insertAll(table: never, rows: unknown[], label: string) {
 
 console.log("\nSeeding Recruitment Command Center\n");
 
+const roleRows = ROLES.map((r) => ({
+  key: r.key,
+  label: r.label,
+  description: r.description,
+  rank: r.rank,
+  isSystem: true,
+  createdAt: new Date(NOW),
+}));
+const permissionRows = PERMISSIONS.map((p) => ({
+  key: p.key,
+  label: p.label,
+  category: p.category,
+  description: p.description,
+  sensitive: Boolean((p as { sensitive?: boolean }).sensitive),
+}));
+const rolePermissionRows = ROLES.flatMap((r) =>
+  r.permissions.map((perm) => ({
+    id: id("rpm"),
+    roleKey: r.key,
+    permissionKey: perm,
+  })),
+);
+
 sqlite.transaction(() => {
+  insertAll(s.roles as never, roleRows, "roles");
+  insertAll(s.permissions as never, permissionRows, "permissions");
+  insertAll(s.rolePermissions as never, rolePermissionRows, "role permissions");
   insertAll(s.users as never, users, "users");
   insertAll(s.clients as never, clients, "clients");
   insertAll(s.requisitions as never, requisitions, "requisitions");

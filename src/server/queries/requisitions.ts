@@ -17,6 +17,8 @@ import {
 } from "@/db/schema";
 import { ACTIVE_STAGES, PRIORITY_WEIGHT, type Priority, type Stage } from "@/lib/domain";
 import { daysBetween } from "@/lib/utils";
+import type { User } from "@/db/schema";
+import { requisitionScope, visibleRequisitionIds } from "@/server/authz";
 
 export interface RequisitionFilters {
   q?: string;
@@ -109,9 +111,19 @@ function pipelineCounts() {
   return map;
 }
 
-export function listRequisitions(filters: RequisitionFilters = {}): RequisitionRow[] {
+export function listRequisitions(
+  filters: RequisitionFilters = {},
+  actor?: User,
+): RequisitionRow[] {
   const hm = alias(users, "hm");
   const conditions = [];
+
+  // Row-level scope. Applied as SQL so out-of-scope rows are never loaded,
+  // rather than filtered out after the fact.
+  if (actor) {
+    const scope = requisitionScope(actor);
+    if (scope) conditions.push(scope);
+  }
 
   if (filters.q) {
     const term = `%${filters.q.toLowerCase()}%`;
@@ -283,7 +295,11 @@ export function requisitionHealth(r: RequisitionRow): Health {
   };
 }
 
-export function getRequisition(reqId: string) {
+export function getRequisition(reqId: string, actor?: User) {
+  if (actor) {
+    const visible = visibleRequisitionIds(actor);
+    if (visible !== null && !visible.includes(reqId)) return null;
+  }
   const hm = alias(users, "hm");
   const row = db
     .select({
@@ -392,7 +408,7 @@ export function requisitionFacets() {
   const recruiterList = db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(inArray(users.role, ["recruiter", "admin"]))
+    .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
     .orderBy(asc(users.name))
     .all();
 

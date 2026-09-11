@@ -5,14 +5,19 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { candidates } from "@/db/schema";
+import type { User } from "@/db/schema";
 import { candidateSchema } from "@/lib/validation";
-import { currentUser } from "@/server/session";
-import { fail, logActivity, newId, parseForm, succeed, type ActionState } from "./shared";
+import {
+  fail,
+  guarded,
+  logActivity,
+  newId,
+  parseForm,
+  succeed,
+  type ActionState,
+} from "./shared";
 
-export async function createCandidate(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function createCandidateImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(candidateSchema, formData);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
@@ -24,7 +29,6 @@ export async function createCandidate(
     });
   }
 
-  const actor = await currentUser();
   const id = newId("cnd");
 
   db.insert(candidates)
@@ -72,10 +76,7 @@ export async function createCandidate(
   return succeed(`${input.firstName} ${input.lastName} added`, id);
 }
 
-export async function updateCandidate(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function updateCandidateImpl(actor: User, formData: FormData): Promise<ActionState> {
   const candidateId = String(formData.get("candidateId") ?? "");
   if (!candidateId) return fail("Missing candidate.");
 
@@ -91,7 +92,6 @@ export async function updateCandidate(
     return fail("Another candidate already uses that email.", { email: "Email already in use" });
   }
 
-  const actor = await currentUser();
 
   db.update(candidates)
     .set({
@@ -136,12 +136,11 @@ export async function updateCandidate(
   return succeed("Candidate updated", candidateId);
 }
 
-export async function logContact(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function logContactImpl(actor: User, formData: FormData): Promise<ActionState> {
   const candidateId = String(formData.get("candidateId") ?? "");
   const candidate = db.select().from(candidates).where(eq(candidates.id, candidateId)).get();
   if (!candidate) return fail("That candidate no longer exists.");
 
-  const actor = await currentUser();
   db.update(candidates)
     .set({ lastContactedAt: new Date(), updatedAt: new Date() })
     .where(eq(candidates.id, candidateId))
@@ -158,3 +157,12 @@ export async function logContact(_prev: ActionState, formData: FormData): Promis
   revalidatePath(`/candidates/${candidateId}`);
   return succeed("Touchpoint logged");
 }
+
+
+/* ---- Guarded exports -------------------------------------------- *
+ * Each mutation is only reachable through its permission check.
+ * ------------------------------------------------------------------ */
+
+export const createCandidate = guarded("candidate.create", createCandidateImpl);
+export const updateCandidate = guarded("candidate.edit", updateCandidateImpl);
+export const logContact = guarded("candidate.edit", logContactImpl);

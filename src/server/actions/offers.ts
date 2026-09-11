@@ -5,10 +5,21 @@ import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { candidates, offers, requisitions, stageEvents, submissions } from "@/db/schema";
+import type { User } from "@/db/schema";
 import { OFFER_STATUS, OFFER_TRANSITIONS, type OfferStatus } from "@/lib/domain";
 import { offerSchema, offerTransitionSchema } from "@/lib/validation";
-import { currentUser } from "@/server/session";
-import { daysFromNow, fail, logActivity, newId, parseForm, succeed, type ActionState } from "./shared";
+import { can, canTouchRequisition } from "@/server/authz";
+import {
+  daysFromNow,
+  denied,
+  fail,
+  guarded,
+  logActivity,
+  newId,
+  parseForm,
+  succeed,
+  type ActionState,
+} from "./shared";
 
 function context(submissionId: string) {
   return db
@@ -28,7 +39,7 @@ function revalidateAll(requisitionId?: string, candidateId?: string) {
   if (candidateId) revalidatePath(`/candidates/${candidateId}`);
 }
 
-export async function createOffer(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function createOfferImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(offerSchema, formData);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
@@ -59,7 +70,6 @@ export async function createOffer(_prev: ActionState, formData: FormData): Promi
     .where(eq(offers.submissionId, input.submissionId))
     .all().length;
 
-  const actor = await currentUser();
   const id = newId("ofr");
   const now = new Date();
 
@@ -117,7 +127,7 @@ export async function createOffer(_prev: ActionState, formData: FormData): Promi
   return succeed("Offer drafted", id);
 }
 
-export async function updateOffer(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function updateOfferImpl(actor: User, formData: FormData): Promise<ActionState> {
   const offerId = String(formData.get("offerId") ?? "");
   const parsed = parseForm(offerSchema, formData);
   if (!parsed.success) return parsed.state;
@@ -130,7 +140,6 @@ export async function updateOffer(_prev: ActionState, formData: FormData): Promi
   }
 
   const ctx = context(existing.submissionId);
-  const actor = await currentUser();
 
   db.update(offers)
     .set({
@@ -162,10 +171,7 @@ export async function updateOffer(_prev: ActionState, formData: FormData): Promi
   return succeed("Offer updated", offerId);
 }
 
-export async function transitionOffer(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function transitionOfferImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(offerTransitionSchema, formData);
   if (!parsed.success) return parsed.state;
   const { offerId, status, declineReason } = parsed.data;
@@ -187,8 +193,13 @@ export async function transitionOffer(
 
   const ctx = context(offer.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
+  if (!canTouchRequisition(actor, ctx.requisition.id)) return denied("that offer");
+  // Approval is a separate permission from progressing an offer: a recruiter
+  // may extend and record a response, but must not sign off their own terms.
+  if (to === "approved" && !can(actor, "offer.approve")) {
+    return fail("Only a hiring manager or recruitment manager can approve an offer.");
+  }
 
-  const actor = await currentUser();
   const now = new Date();
 
   db.transaction((tx) => {
@@ -293,3 +304,12 @@ export async function transitionOffer(
   revalidateAll(ctx.requisition.id, ctx.candidate.id);
   return succeed(`Offer ${OFFER_STATUS[to].label.toLowerCase()}`);
 }
+
+
+/* ---- Guarded exports -------------------------------------------- *
+ * Each mutation is only reachable through its permission check.
+ * ------------------------------------------------------------------ */
+
+export const createOffer = guarded("offer.create", createOfferImpl);
+export const updateOffer = guarded("offer.edit", updateOfferImpl);
+export const transitionOffer = guarded("offer.transition", transitionOfferImpl);

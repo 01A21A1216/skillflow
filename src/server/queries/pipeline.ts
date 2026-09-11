@@ -18,6 +18,8 @@ import {
 } from "@/db/schema";
 import { ACTIVE_STAGES, STAGE_SLA_DAYS, type Stage } from "@/lib/domain";
 import { daysBetween } from "@/lib/utils";
+import type { User } from "@/db/schema";
+import { submissionScope, visibleRequisitionIds } from "@/server/authz";
 
 export interface PipelineFilters {
   q?: string;
@@ -57,12 +59,16 @@ export interface PipelineCard {
 }
 
 /** Every live card in the funnel, ready to be bucketed by stage. */
-export function pipelineCards(filters: PipelineFilters = {}): PipelineCard[] {
+export function pipelineCards(filters: PipelineFilters = {}, actor?: User): PipelineCard[] {
   const conditions = [
     eq(submissions.status, "active"),
     inArray(submissions.stage, ACTIVE_STAGES as unknown as string[]),
   ];
 
+  if (actor) {
+    const scope = submissionScope(actor);
+    if (scope) conditions.push(scope);
+  }
   if (filters.requisition && filters.requisition !== "all")
     conditions.push(eq(submissions.requisitionId, filters.requisition));
   if (filters.recruiter && filters.recruiter !== "all")
@@ -179,7 +185,11 @@ export function groupByStage(cards: PipelineCard[]) {
   return buckets;
 }
 
-export function getSubmission(submissionId: string) {
+export function getSubmission(submissionId: string, actor?: User) {
+  if (actor) {
+    const visible = visibleRequisitionIds(actor);
+    if (visible !== null && !visible.length) return null;
+  }
   const row = db
     .select({
       submission: submissions,
@@ -197,6 +207,10 @@ export function getSubmission(submissionId: string) {
     .get();
 
   if (!row) return null;
+  if (actor) {
+    const visible = visibleRequisitionIds(actor);
+    if (visible !== null && !visible.includes(row.requisition.id)) return null;
+  }
 
   const ivs = db
     .select()

@@ -28,10 +28,27 @@ npm run dev        # http://localhost:3000
 | **Offers** | Offer register with a legal-transition state machine, position against the approved salary band, total compensation, expiry tracking, decline-reason capture and acceptance-rate trend. |
 | **Analytics** | Funnel with per-step conversion, stage velocity, time-to-fill and time-to-hire, 12-month throughput, source effectiveness, recruiter performance, pipeline aging, close-out reasons, interview operations and interviewer load. |
 | **Team / Clients** | Recruiter capacity and utilisation, interviewer load and feedback debt; client accounts with demand, coverage and fill rate. |
+| **Access control** | Sign-in, sessions, and the seven specified roles with a configurable permission matrix. What each person sees and can do is decided in the query and action layers, not the UI. |
 
 Cross-cutting: ⌘K global search, URL-driven filters (every view is shareable and
-survives a reload), light/dark themes, and an actor switcher so writes are attributed to a
-real person and the audit trail stays meaningful.
+survives a reload), light/dark themes, and an audit trail that attributes every write to
+the signed-in person.
+
+### Signing in
+
+`npm run db:reset` creates one account per role, all with the password `demo1234`. The
+sign-in page lists them in development and never in production. Signing in as different
+roles is the quickest way to see access control working:
+
+| Role | Account | What they see |
+|---|---|---|
+| Super Admin | `dana.whitfield@meridiantalent.com` | Everything, including settings |
+| Recruitment Manager | `marcus.ellery@meridiantalent.com` | The whole organisation; approves offers |
+| Recruiter | `priya.raghavan@meridiantalent.com` | Only their assigned requirements |
+| Sourcer | `tobias.lindqvist@meridiantalent.com` | Top of funnel; cannot submit onward or see offers |
+| Hiring Manager | `victor.castellanos@meridiantalent.com` | Their requirements; approves offers but cannot draft them |
+| Interviewer | `kiran.pillai@meridiantalent.com` | Only their own panels and scorecards |
+| Read-only Management | `helena.voss@meridiantalent.com` | Dashboards and analytics; no writes, no candidate contact details |
 
 ---
 
@@ -76,6 +93,30 @@ offer state exactly once, together with its human label and its colour tone. The
 the validation schemas and every badge in the UI read from the same table, so they cannot
 drift apart. Stage SLAs live there too, which is what drives the aging chips and the "past
 the stage target" counts.
+
+### Access control
+
+Three rules keep this auditable rather than clever:
+
+1. **Permissions live in the database**, seeded from `src/lib/permissions.ts`, because the
+   specification requires the matrix to be configurable. Scope is encoded in the
+   permission itself (`requisition.view.all` versus `requisition.view.assigned`), so every
+   decision is one boolean lookup.
+2. **Scope is a SQL predicate, not a filter.** A recruiter who cannot see a requirement
+   never receives its row, so there is nothing to leak through a serialised prop, an API
+   route or a future AI assistant.
+3. **Mutations are guarded by a wrapper, not by convention.** Every action is exported as
+   `guarded("permission", impl)`, so a new action cannot forget its check — there is no
+   path to the handler that skips it. This matters because server actions are POST
+   endpoints reachable by anyone who can load the page; a button hidden in the UI is not a
+   control.
+
+Candidate contact details and compensation are stripped server-side for roles without
+`candidate.pii`, so they are absent from the HTML rather than hidden with CSS. Sessions
+are opaque tokens in an `HttpOnly` cookie; the database stores only their SHA-256 hash,
+so a dump of the sessions table cannot be replayed. Passwords use scrypt from
+`node:crypto`, and the sign-in path spends the same time on a missing account as a wrong
+password so it cannot be used to enumerate users.
 
 ### Reads and writes
 
@@ -152,6 +193,7 @@ server is running (on Windows the server holds an open handle).
 | `npm run build` / `npm start` | Production build and serve |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
+| `npm test` | Vitest — currently the permission matrix |
 | `npm run db:generate` | Generate a migration from `schema.ts` |
 | `npm run db:seed` | Rebuild the database from the simulation |
 | `npm run db:reset` | Generate then seed |
@@ -163,14 +205,14 @@ The database lives at `data/rcc.db`; override with `DATABASE_PATH`.
 
 ## Notes and limitations
 
-- **There is no authentication.** The app operates "as" a chosen member of the talent team,
-  picked from the top bar and remembered in a cookie, so every write is still attributed
-  and the audit trail is meaningful. A real deployment would put an identity provider in
-  front and derive the actor from the session instead — `src/server/session.ts` is the
-  single place that would change.
-- **Authorization is not modelled.** Every actor can perform every action. Role-based
-  permissions (only leadership approves offers, hiring managers cannot edit bands) would
-  belong in the action layer next to the existing business rules.
+- **Authentication is password-only.** There is no SSO, no MFA and no password-reset flow.
+  `src/server/auth.ts` and `src/server/session.ts` are the two files an identity provider
+  would replace; nothing else reads the cookie.
+- **The settings UI for editing the permission matrix is not built yet.** The matrix is
+  stored in the database and seeded from code, so it is configurable by an administrator
+  with database access but not yet through the app.
+- **Test coverage is narrow.** The permission matrix is covered; the action-layer business
+  rules (offer state machine, hire cascade) are not yet. See `BACKLOG.md` item 5.1.
 - **SQLite suits a single-node deployment.** The query layer is plain Drizzle, so moving to
   Postgres is a dialect change plus a connection swap, not a rewrite.
 - Email, calendar and job-board integrations are out of scope; interviews record a meeting

@@ -14,10 +14,20 @@ import {
   submissions,
   users,
 } from "@/db/schema";
+import type { User } from "@/db/schema";
 import { INTERVIEW_TYPE, type InterviewType } from "@/lib/domain";
 import { feedbackSchema, interviewOutcomeSchema, interviewSchema } from "@/lib/validation";
-import { currentUser } from "@/server/session";
-import { fail, logActivity, newId, parseForm, succeed, type ActionState } from "./shared";
+import { can, canTouchRequisition } from "@/server/authz";
+import {
+  denied,
+  fail,
+  guarded,
+  logActivity,
+  newId,
+  parseForm,
+  succeed,
+  type ActionState,
+} from "./shared";
 
 function context(submissionId: string) {
   return db
@@ -29,16 +39,14 @@ function context(submissionId: string) {
     .get();
 }
 
-export async function scheduleInterview(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(interviewSchema, formData, ["panelIds"]);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
   const ctx = context(input.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
+  if (!canTouchRequisition(actor, ctx.requisition.id)) return denied("that requisition");
 
   const when = new Date(input.scheduledAt);
   if (Number.isNaN(when.getTime())) {
@@ -53,7 +61,6 @@ export async function scheduleInterview(
     return fail("Pick at least one interviewer.", { panelIds: "Select an interviewer" });
   }
 
-  const actor = await currentUser();
   const id = newId("ivw");
   const now = new Date();
 
@@ -133,10 +140,7 @@ export async function scheduleInterview(
   return succeed(`${input.title} scheduled`, id);
 }
 
-export async function updateInterviewOutcome(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function updateInterviewOutcomeImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(interviewOutcomeSchema, formData);
   if (!parsed.success) return parsed.state;
   const { interviewId, status, outcome } = parsed.data;
@@ -147,7 +151,6 @@ export async function updateInterviewOutcome(
   const ctx = context(interview.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
 
-  const actor = await currentUser();
 
   db.update(interviews)
     .set({ status, outcome: status === "completed" ? outcome : "pending", updatedAt: new Date() })
@@ -170,7 +173,7 @@ export async function updateInterviewOutcome(
   return succeed("Interview updated");
 }
 
-export async function submitFeedback(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function submitFeedbackImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(feedbackSchema, formData);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
@@ -199,6 +202,10 @@ export async function submitFeedback(_prev: ActionState, formData: FormData): Pr
     return fail(`${interviewer.name} is not on this interview panel.`, {
       interviewerId: "Not on the panel",
     });
+  }
+  // You may only file a scorecard as yourself, unless you administer feedback.
+  if (input.interviewerId !== actor.id && !can(actor, "feedback.view.all")) {
+    return fail("You can only submit your own feedback.");
   }
 
   const existing = db
@@ -294,13 +301,12 @@ export async function submitFeedback(_prev: ActionState, formData: FormData): Pr
   return succeed(existing ? "Feedback updated" : "Feedback submitted");
 }
 
-export async function cancelInterview(_prev: ActionState, formData: FormData): Promise<ActionState> {
+async function cancelInterviewImpl(actor: User, formData: FormData): Promise<ActionState> {
   const interviewId = String(formData.get("interviewId") ?? "");
   const interview = db.select().from(interviews).where(eq(interviews.id, interviewId)).get();
   if (!interview) return fail("That interview no longer exists.");
 
   const ctx = context(interview.submissionId);
-  const actor = await currentUser();
 
   db.update(interviews)
     .set({ status: "cancelled", outcome: "pending", updatedAt: new Date() })
@@ -319,3 +325,13 @@ export async function cancelInterview(_prev: ActionState, formData: FormData): P
   revalidatePath("/");
   return succeed("Interview cancelled");
 }
+
+
+/* ---- Guarded exports -------------------------------------------- *
+ * Each mutation is only reachable through its permission check.
+ * ------------------------------------------------------------------ */
+
+export const scheduleInterview = guarded("interview.schedule", scheduleInterviewImpl);
+export const updateInterviewOutcome = guarded("interview.schedule", updateInterviewOutcomeImpl);
+export const submitFeedback = guarded("feedback.submit", submitFeedbackImpl);
+export const cancelInterview = guarded("interview.cancel", cancelInterviewImpl);

@@ -3,7 +3,9 @@ import "server-only";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { activities, offers, requisitions, submissions, users } from "@/db/schema";
+import { activities, submissions, users } from "@/db/schema";
+import type { User } from "@/db/schema";
+import { can, visibleRequisitionIds } from "@/server/authz";
 import { ACTIVE_STAGES, STAGE_SLA_DAYS, type Stage } from "@/lib/domain";
 import { daysBetween, pct } from "@/lib/utils";
 import { funnel, monthlyTrend, timeToHire } from "./analytics";
@@ -31,18 +33,18 @@ function quarterStart(d = new Date()) {
   return new Date(d.getFullYear(), q * 3, 1);
 }
 
-export function dashboardSnapshot() {
-  const reqs = listRequisitions();
+export function dashboardSnapshot(actor?: User) {
+  const reqs = listRequisitions({}, actor);
   const openReqs = reqs.filter((r) => ["open", "on_hold", "draft"].includes(r.status));
-  const cards = pipelineCards();
+  const cards = pipelineCards({}, actor);
 
   const now = Date.now();
   const weekAhead = new Date(now + 7 * DAY);
 
-  const upcoming = listInterviews({ window: "upcoming" });
+  const upcoming = listInterviews({ window: "upcoming" }, actor);
   const thisWeek = upcoming.filter((i) => i.scheduledAt <= weekAhead);
 
-  const allOffers = listOffers();
+  const allOffers = listOffers({}, actor);
   const openOffers = allOffers.filter((o) => o.isOpen);
   const extendedOffers = allOffers.filter((o) => o.status === "extended");
 
@@ -71,6 +73,7 @@ export function dashboardSnapshot() {
     )
     .get()!.count;
 
+  const reporting = actor ? can(actor, "report.view") : true;
   const ttf = timeToHire();
   const responded = allOffers.filter((o) => ["accepted", "declined"].includes(o.status));
   const acceptance = responded.length
@@ -80,7 +83,7 @@ export function dashboardSnapshot() {
   const agingCards = cards.filter((c) => c.isAging);
   const openings = openReqs.reduce((s, r) => s + (r.openings - r.filled), 0);
 
-  const kpis: Kpi[] = [
+  const allKpis: Kpi[] = [
     {
       key: "reqs",
       label: "Open requisitions",
@@ -158,8 +161,21 @@ export function dashboardSnapshot() {
     },
   ];
 
+  // Tiles the actor has no permission to see are dropped server-side rather
+  // than hidden in the markup.
+  const REPORTING_TILES = new Set(["hires", "ttf", "acceptance"]);
+  const kpis = allKpis.filter((k) => {
+    if (REPORTING_TILES.has(k.key) && !reporting) return false;
+    if (k.key === "offers" && actor && !can(actor, "offer.view")) return false;
+    if (k.key === "reqs" && actor && !can(actor, "requisition.view.assigned")) return false;
+    if (k.key === "pipeline" && actor && !can(actor, "requisition.view.assigned")) return false;
+    if (k.key === "attention" && actor && !can(actor, "requisition.view.assigned")) return false;
+    return true;
+  });
+
   return {
     kpis,
+    reporting,
     reqs,
     openReqs,
     cards,
@@ -167,8 +183,8 @@ export function dashboardSnapshot() {
     thisWeek,
     offers: allOffers,
     openOffers,
-    funnel: funnel(new Date(now - 180 * DAY)),
-    trend: monthlyTrend(12),
+    funnel: reporting ? funnel(new Date(now - 180 * DAY)) : [],
+    trend: reporting ? monthlyTrend(12) : [],
     stageTotals: stageTotals(cards),
   };
 }
@@ -203,11 +219,11 @@ export interface ActionItem {
 /** Feedback older than this is historical debt, not something to chase today. */
 const FEEDBACK_CHASE_WINDOW_DAYS = 21;
 
-export function actionQueue(limit = 12): ActionItem[] {
+export function actionQueue(limit = 12, actor?: User): ActionItem[] {
   const items: ActionItem[] = [];
   const now = Date.now();
 
-  for (const iv of awaitingFeedback()) {
+  for (const iv of awaitingFeedback(undefined, actor)) {
     const overdueDays = daysBetween(iv.scheduledAt);
     if (overdueDays < 1 || overdueDays > FEEDBACK_CHASE_WINDOW_DAYS) continue;
     const missing = iv.panelSize - iv.feedbackCount;
@@ -223,7 +239,7 @@ export function actionQueue(limit = 12): ActionItem[] {
     });
   }
 
-  for (const o of listOffers({ status: "open" })) {
+  for (const o of listOffers({ status: "open" }, actor)) {
     if (o.daysToExpiry === null || o.daysToExpiry > 5) continue;
     items.push({
       id: `off-${o.id}`,
@@ -237,7 +253,7 @@ export function actionQueue(limit = 12): ActionItem[] {
     });
   }
 
-  const cards = pipelineCards();
+  const cards = pipelineCards({}, actor);
   for (const c of cards) {
     if (!c.isAging || c.daysInStage < c.slaDays * 2) continue;
     items.push({
@@ -252,7 +268,7 @@ export function actionQueue(limit = 12): ActionItem[] {
     });
   }
 
-  for (const r of listRequisitions({ status: "active" })) {
+  for (const r of listRequisitions({ status: "active" }, actor)) {
     const health = requisitionHealth(r);
     if (health.key !== "stalled" && health.key !== "at_risk") continue;
     items.push({
@@ -271,7 +287,7 @@ export function actionQueue(limit = 12): ActionItem[] {
 
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
-  for (const iv of listInterviews({ window: "today" })) {
+  for (const iv of listInterviews({ window: "today" }, actor)) {
     if (iv.status !== "scheduled" || iv.scheduledAt.getTime() < now) continue;
     items.push({
       id: `iv-${iv.id}`,
@@ -315,16 +331,41 @@ export function actionQueue(limit = 12): ActionItem[] {
  * Activity feed
  * ------------------------------------------------------------------ */
 
-export function recentActivity(limit = 25, entity?: { type: string; id: string }) {
+export function recentActivity(
+  limit = 25,
+  entity?: { type: string; id: string },
+  actor?: User,
+) {
+  const conditions = [];
+  if (entity) {
+    conditions.push(and(eq(activities.entityType, entity.type), eq(activities.entityId, entity.id)));
+  }
+
+  // Scope the feed to entities the actor can reach. Without this the activity
+  // summaries would narrate records their permissions otherwise hide.
+  if (actor) {
+    const visible = visibleRequisitionIds(actor);
+    if (visible !== null) {
+      const subIds = visible.length
+        ? db
+            .select({ id: submissions.id })
+            .from(submissions)
+            .where(inArray(submissions.requisitionId, visible))
+            .all()
+            .map((r) => r.id)
+        : [];
+      const reachable = [...visible, ...subIds, actor.id];
+      conditions.push(
+        reachable.length ? inArray(activities.entityId, reachable) : eq(activities.id, "__none__"),
+      );
+    }
+  }
+
   return db
     .select({ activity: activities, actor: users })
     .from(activities)
     .leftJoin(users, eq(users.id, activities.actorId))
-    .where(
-      entity
-        ? and(eq(activities.entityType, entity.type), eq(activities.entityId, entity.id))
-        : undefined,
-    )
+    .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(activities.createdAt))
     .limit(limit)
     .all();
@@ -370,8 +411,11 @@ export function candidateActivity(candidateId: string, limit = 40) {
 }
 
 /** Requisitions ranked by how much they need a human today. */
-export function attentionList(limit = 6): (RequisitionRow & { health: ReturnType<typeof requisitionHealth> })[] {
-  return listRequisitions({ status: "active" })
+export function attentionList(
+  limit = 6,
+  actor?: User,
+): (RequisitionRow & { health: ReturnType<typeof requisitionHealth> })[] {
+  return listRequisitions({ status: "active" }, actor)
     .map((r) => ({ ...r, health: requisitionHealth(r) }))
     .filter((r) => r.health.key !== "healthy")
     .sort((a, b) => {
@@ -391,26 +435,14 @@ export function teamRoster() {
   return db.select().from(users).orderBy(users.name).all();
 }
 
-export function openRequisitionCount() {
-  return db
-    .select({ count: sql<number>`count(*)` })
-    .from(requisitions)
-    .where(inArray(requisitions.status, ["open", "on_hold", "draft"]))
-    .get()!.count;
+export function openRequisitionCount(actor?: User) {
+  return listRequisitions({ status: "active" }, actor).length;
 }
 
-export function activePipelineCount() {
-  return db
-    .select({ count: sql<number>`count(*)` })
-    .from(submissions)
-    .where(and(eq(submissions.status, "active"), inArray(submissions.stage, ACTIVE_STAGES as unknown as string[])))
-    .get()!.count;
+export function activePipelineCount(actor?: User) {
+  return pipelineCards({}, actor).length;
 }
 
-export function openOfferCount() {
-  return db
-    .select({ count: sql<number>`count(*)` })
-    .from(offers)
-    .where(inArray(offers.status, ["draft", "pending_approval", "approved", "extended"]))
-    .get()!.count;
+export function openOfferCount(actor?: User) {
+  return listOffers({ status: "open" }, actor).length;
 }

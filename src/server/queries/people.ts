@@ -24,7 +24,7 @@ export function recruiterOptions() {
   return db
     .select({ id: users.id, name: users.name, role: users.role })
     .from(users)
-    .where(inArray(users.role, ["recruiter", "admin"]))
+    .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
     .orderBy(asc(users.name))
     .all();
 }

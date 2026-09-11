@@ -5,10 +5,20 @@ import { eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { clients, requisitionAssignees, requisitions, users } from "@/db/schema";
+import type { User } from "@/db/schema";
 import { REQ_STATUS, type ReqStatus } from "@/lib/domain";
 import { requisitionSchema, requisitionStatusSchema } from "@/lib/validation";
-import { currentUser } from "@/server/session";
-import { fail, logActivity, newId, parseForm, succeed, type ActionState } from "./shared";
+import { canTouchRequisition } from "@/server/authz";
+import {
+  denied,
+  fail,
+  guarded,
+  logActivity,
+  newId,
+  parseForm,
+  succeed,
+  type ActionState,
+} from "./shared";
 
 function nextReqCode() {
   const year = new Date().getFullYear();
@@ -24,15 +34,11 @@ function nextReqCode() {
   return `${prefix}${String(Number.isFinite(n) ? n : 1).padStart(3, "0")}`;
 }
 
-export async function createRequisition(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function createRequisitionImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(requisitionSchema, formData);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const actor = await currentUser();
 
   const client = db.select().from(clients).where(eq(clients.id, input.clientId)).get();
   if (!client) return fail("That client no longer exists.", { clientId: "Unknown client" });
@@ -95,10 +101,7 @@ export async function createRequisition(
   return succeed(`${code} created`, id);
 }
 
-export async function updateRequisition(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function updateRequisitionImpl(actor: User, formData: FormData): Promise<ActionState> {
   const requisitionId = String(formData.get("requisitionId") ?? "");
   if (!requisitionId) return fail("Missing requisition.");
 
@@ -108,8 +111,7 @@ export async function updateRequisition(
 
   const existing = db.select().from(requisitions).where(eq(requisitions.id, requisitionId)).get();
   if (!existing) return fail("That requisition no longer exists.");
-
-  const actor = await currentUser();
+  if (!canTouchRequisition(actor, requisitionId)) return denied("that requisition");
 
   db.update(requisitions)
     .set({
@@ -151,10 +153,7 @@ export async function updateRequisition(
   return succeed("Requisition updated", requisitionId);
 }
 
-export async function changeRequisitionStatus(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function changeRequisitionStatusImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(requisitionStatusSchema, formData);
   if (!parsed.success) return parsed.state;
   const { requisitionId, status, reason } = parsed.data;
@@ -162,8 +161,8 @@ export async function changeRequisitionStatus(
   const existing = db.select().from(requisitions).where(eq(requisitions.id, requisitionId)).get();
   if (!existing) return fail("That requisition no longer exists.");
   if (existing.status === status) return fail(`Already ${REQ_STATUS[status as ReqStatus].label.toLowerCase()}.`);
+  if (!canTouchRequisition(actor, requisitionId)) return denied("that requisition");
 
-  const actor = await currentUser();
   const closing = ["filled", "closed", "cancelled"].includes(status);
 
   db.update(requisitions)
@@ -190,14 +189,13 @@ export async function changeRequisitionStatus(
   return succeed(`Moved to ${REQ_STATUS[status as ReqStatus].label}`);
 }
 
-export async function assignToRequisition(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
+async function assignToRequisitionImpl(actor: User, formData: FormData): Promise<ActionState> {
   const requisitionId = String(formData.get("requisitionId") ?? "");
   const userId = String(formData.get("userId") ?? "");
   const role = String(formData.get("role") ?? "support");
   if (!requisitionId || !userId) return fail("Pick someone to add.");
+
+  if (!canTouchRequisition(actor, requisitionId)) return denied("that requisition");
 
   const person = db.select().from(users).where(eq(users.id, userId)).get();
   if (!person) return fail("That person no longer exists.");
@@ -215,7 +213,6 @@ export async function assignToRequisition(
     .values({ id: newId("ras"), requisitionId, userId, role })
     .run();
 
-  const actor = await currentUser();
   logActivity({
     entityType: "requisition",
     entityId: requisitionId,
@@ -227,3 +224,13 @@ export async function assignToRequisition(
   revalidatePath(`/requisitions/${requisitionId}`);
   return succeed(`${person.name} added`);
 }
+
+
+/* ---- Guarded exports -------------------------------------------- *
+ * Each mutation is only reachable through its permission check.
+ * ------------------------------------------------------------------ */
+
+export const createRequisition = guarded("requisition.create", createRequisitionImpl);
+export const updateRequisition = guarded("requisition.edit", updateRequisitionImpl);
+export const changeRequisitionStatus = guarded("requisition.status", changeRequisitionStatusImpl);
+export const assignToRequisition = guarded("requisition.assign", assignToRequisitionImpl);

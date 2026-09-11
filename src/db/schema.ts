@@ -41,10 +41,88 @@ export const users = sqliteTable(
     capacity: integer("capacity").notNull().default(12), // target concurrent reqs
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     joinedAt: text("joined_at").notNull(),
+    /** scrypt digest, stored as `scrypt$N$r$p$salt$hash`. Null = cannot sign in. */
+    passwordHash: text("password_hash"),
+    lastLoginAt: integer("last_login_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("users_email_idx").on(t.email)],
 );
+
+/* ------------------------------------------------------------------ *
+ * Identity and access control
+ *
+ * Roles and permissions are rows, not constants, because the spec
+ * requires the permission matrix to be configurable by an administrator.
+ * `users.role` references `roles.key` so existing role strings keep
+ * working and no wide migration of the users table is needed.
+ * ------------------------------------------------------------------ */
+
+export const roles = sqliteTable("roles", {
+  key: text("key").primaryKey(),
+  label: text("label").notNull(),
+  description: text("description").notNull().default(""),
+  /** Lower ranks are more privileged; used for "can this actor manage that one". */
+  rank: integer("rank").notNull().default(100),
+  /** System roles cannot be deleted, only have their permissions edited. */
+  isSystem: integer("is_system", { mode: "boolean" }).notNull().default(true),
+  createdAt: createdAt(),
+});
+
+export const permissions = sqliteTable("permissions", {
+  key: text("key").primaryKey(),
+  label: text("label").notNull(),
+  category: text("category").notNull(),
+  description: text("description").notNull().default(""),
+  /** Marks permissions that expose candidate PII, for review and reporting. */
+  sensitive: integer("sensitive", { mode: "boolean" }).notNull().default(false),
+});
+
+export const rolePermissions = sqliteTable(
+  "role_permissions",
+  {
+    id: pk(),
+    roleKey: text("role_key")
+      .notNull()
+      .references(() => roles.key, { onDelete: "cascade" }),
+    permissionKey: text("permission_key")
+      .notNull()
+      .references(() => permissions.key, { onDelete: "cascade" }),
+  },
+  (t) => [
+    uniqueIndex("role_permission_idx").on(t.roleKey, t.permissionKey),
+    index("role_permission_role_idx").on(t.roleKey),
+  ],
+);
+
+/**
+ * Sessions store only a SHA-256 hash of the token. The raw token lives in
+ * the user's cookie and nowhere else, so a database leak does not hand
+ * anyone a working session.
+ */
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: pk(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    userAgent: text("user_agent"),
+    createdAt: createdAt(),
+    lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+  },
+  (t) => [
+    uniqueIndex("session_token_idx").on(t.tokenHash),
+    index("session_user_idx").on(t.userId),
+  ],
+);
+
+export type Role = typeof roles.$inferSelect;
+export type Permission = typeof permissions.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
 
 /* ------------------------------------------------------------------ *
  * Client accounts / business units that raise requirements

@@ -23,7 +23,7 @@ import { useToast } from "@/components/ui/toast";
 import { Avatar } from "@/components/ui/avatar";
 import { toneVars } from "@/components/ui/tone";
 import { AgeChip, SkillChips } from "./badges";
-import { CardActions } from "./pipeline-actions";
+import { CardActions, usePipelineOptions } from "./pipeline-actions";
 
 interface Move {
   id: string;
@@ -41,6 +41,7 @@ export function PipelineBoard({
   compact?: boolean;
 }) {
   const toast = useToast();
+  const { capabilities } = usePipelineOptions();
   const [, startTransition] = useTransition();
   const [dragging, setDragging] = useState<PipelineCard | null>(null);
 
@@ -100,6 +101,7 @@ export function PipelineBoard({
             cards={columns.get(stage) ?? []}
             requiredSkills={requiredSkills}
             compact={compact}
+            draggable={capabilities.move}
           />
         ))}
       </div>
@@ -120,11 +122,13 @@ function Column({
   cards,
   requiredSkills,
   compact,
+  draggable,
 }: {
   stage: Stage;
   cards: PipelineCard[];
   requiredSkills?: string[];
   compact: boolean;
+  draggable: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
   const meta = STAGE[stage];
@@ -161,16 +165,20 @@ function Column({
       <div className="flex min-h-[6rem] flex-1 flex-col gap-2 px-2 pb-2">
         {cards.length ? (
           cards.map((card) => (
-            <DraggableCard
-              key={card.id}
-              card={card}
-              requiredSkills={requiredSkills}
-              compact={compact}
-            />
+            draggable ? (
+              <DraggableCard
+                key={card.id}
+                card={card}
+                requiredSkills={requiredSkills}
+                compact={compact}
+              />
+            ) : (
+              <Card key={card.id} card={card} requiredSkills={requiredSkills} compact={compact} />
+            )
           ))
         ) : (
           <p className="px-2 py-6 text-center text-[12px] text-content-subtle">
-            Drop a candidate here
+            {draggable ? "Drop a candidate here" : "Nobody at this stage"}
           </p>
         )}
       </div>

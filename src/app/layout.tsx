@@ -1,15 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
-import { AppShell } from "@/components/layout/app-shell";
 import { ToastProvider } from "@/components/ui/toast";
-import { listUsers } from "@/server/queries/people";
-import {
-  activePipelineCount,
-  openOfferCount,
-  openRequisitionCount,
-} from "@/server/queries/dashboard";
-import { listInterviews } from "@/server/queries/interviews";
-import { currentUser } from "@/server/session";
 
 import "./globals.css";
 
@@ -44,34 +35,26 @@ const THEME_BOOTSTRAP = `
 })();
 `;
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const [actor, people] = await Promise.all([currentUser(), Promise.resolve(listUsers())]);
-
-  const upcoming = listInterviews({ window: "week" });
-  const counts = {
-    requisitions: openRequisitionCount(),
-    pipeline: activePipelineCount(),
-    interviews: upcoming.length,
-    offers: openOfferCount(),
-  };
-
+/**
+ * The root layout deliberately knows nothing about sessions. Authentication is
+ * enforced by the (app) group's layout, which lets the (auth) group render the
+ * sign-in page without a redirect loop.
+ *
+ * `html` is suppressed because THEME_BOOTSTRAP adds the `dark` class to
+ * documentElement before React hydrates — a mismatch we create on purpose.
+ * `body` is suppressed because extensions (Grammarly, password managers,
+ * translation tools) inject attributes onto it before hydration. Both flags
+ * are shallow: they cover only that element's own attributes and text, not
+ * the subtree, so real hydration bugs inside the app still surface.
+ */
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    // `html` is suppressed because THEME_BOOTSTRAP adds the `dark` class to
-    // documentElement before React hydrates — a mismatch we create on purpose.
-    // `body` is suppressed because extensions (Grammarly, password managers,
-    // translation tools) inject attributes onto it before hydration. Both flags
-    // are shallow: they cover only that element's own attributes and text, not
-    // the subtree, so real hydration bugs inside the app still surface.
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
       <body suppressHydrationWarning>
-        <ToastProvider>
-          <AppShell actor={actor} people={people} counts={counts}>
-            {children}
-          </AppShell>
-        </ToastProvider>
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );

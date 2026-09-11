@@ -24,10 +24,13 @@ Two things the spec calls out are **already correct** and should not be re-litig
 - **§27, the operating loop.** Ownership, current status, last update, stage age and next
   action are surfaced on the board, the requirement page and the dashboard action queue.
 
-The gaps are concentrated in four places: **access control** (there is none), **data
-integrity guarantees** (no soft delete, no concurrency control, no structured change
-history), **AI** (nothing), and **staffing-specific domain fields** (W2/C2C, visa, rate,
-client review).
+**Access control has since been built** (items 0.1–0.3): sign-in, sessions, the seven
+specified roles, a database-backed permission matrix, SQL-level row scoping and
+server-side PII redaction, with 45 tests pinning the matrix.
+
+The remaining gaps concentrate in three places: **data integrity guarantees** (no soft
+delete, no concurrency control, no structured change history), **AI** (nothing), and
+**staffing-specific domain fields** (W2/C2C, visa, rate, client review).
 
 ---
 
@@ -38,9 +41,9 @@ far cheaper now than after another dozen features land on the tables.
 
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
-| 0.1 | **Authentication** | §22, §23 | ❌ | M | The app currently acts as a cookie-selected team member. `src/server/session.ts` is the single swap point — it already returns a `User`, so callers do not change. |
-| 0.2 | **RBAC: 7 roles + configurable permissions** | §2 | ❌ | L | Roles, permissions and role_permissions tables; a `can(actor, action, resource)` guard called at the top of every server action and query. Today `users.role` exists but is decorative. |
-| 0.3 | **Row-level scoping** | §2, §23 | ❌ | M | Recruiter sees assigned requirements; interviewer sees only their own interviews; management is read-only. Must be enforced in the query layer, not the UI. |
+| 0.1 | **Authentication** | §22, §23 | ✅ | M | Done. scrypt passwords, opaque session tokens with only their hash stored, sliding 12-hour expiry, `HttpOnly` cookie. No SSO/MFA/reset yet. |
+| 0.2 | **RBAC: 7 roles + configurable permissions** | §2 | ✅ | L | Done. Roles, permissions and role_permissions are rows, so the matrix stays configurable. Every mutation is exported as `guarded(permission, impl)` — there is no path to a handler that skips the check. Editing the matrix in-app is item 2.6. |
+| 0.3 | **Row-level scoping** | §2, §23 | ✅ | M | Done as SQL predicates in the query layer, plus server-side PII redaction for roles without `candidate.pii`. Verified: a recruiter sees 14 of 54 requirements, an interviewer 72 of 870 interviews, and read-only management renders zero candidate email addresses. |
 | 0.4 | **Move SQLite → Postgres** | §22 | ❌ | M | SQLite takes one writer at a time. "Multiple recruiters update simultaneously" is the requirement that breaks it. The query layer is plain Drizzle, so this is a dialect + connection change, not a rewrite — but it gets harder with every raw-SQL aggregate added. |
 | 0.5 | **Audit schema with old/new values** | §13, §20 | 🟡 | M | `activities` has `{entityType, entityId, type, actorId, summary, meta, createdAt}` — no structured `field / oldValue / newValue`. §13 requires them. Add columns and emit diffs from the action layer. |
 | 0.6 | **Soft delete + `createdBy` / `updatedBy`** | §20 | ❌ | M | Zero occurrences of `deletedAt` or `updatedBy` in the schema today. Touches every table; do it in one migration. |
@@ -136,7 +139,7 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 
 | # | Item | Status | Size | Notes |
 |---|---|---|---|---|
-| 5.1 | **Automated tests** | ❌ | L | **There are none today** — no test runner, no test script. The highest-value targets are the action-layer business rules: the offer state machine, the hire cascade (offer accepted → submission → candidate → requisition seat count), and stage backfill. These are exactly the rules that break silently. |
+| 5.1 | **Automated tests** | 🟡 | L | Vitest is installed with 45 tests pinning the permission matrix (`npm test`). Still missing, and the highest-value remaining targets, are the action-layer business rules: the offer state machine, the hire cascade (offer accepted → submission → candidate → requisition seat count), and stage backfill. These are exactly the rules that break silently. |
 | 5.2 | **Query performance** | 🟡 | M | Several reads load a full table then filter in TypeScript: `getOffer()` calls `listOffers()` and `.find()`; `getTeamMember()` computes `teamOverview()` for every user to return one; three pages call `listRequisitions({status:"all"})` to look up a single row; candidate pagination slices in JS after loading all matches. Correct and fast at current volumes, wrong shape at 100k candidates. |
 | 5.3 | **Keyboard-accessible pipeline** | 🟡 | S | The board wires `PointerSensor` only. dnd-kit's `KeyboardSensor` would make dragging keyboard-operable. A keyboard path does exist today (each card's "Move stage…" menu), so this is a gap, not a blocker. |
 | 5.4 | **PII handling: encryption at rest, retention, erasure** | ❌ | M | Recruiting data attracts GDPR/CCPA subject-access and deletion requests. Retention policy and a real erasure path (distinct from soft delete) are a legal requirement, not a nice-to-have. |

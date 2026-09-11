@@ -6,6 +6,8 @@ import { db } from "@/db";
 import { candidates, clients, offers, requisitions, submissions, users } from "@/db/schema";
 import { daysBetween } from "@/lib/utils";
 import { alias } from "drizzle-orm/sqlite-core";
+import type { User } from "@/db/schema";
+import { visibleRequisitionIds } from "@/server/authz";
 
 export interface OfferFilters {
   status?: string;
@@ -53,9 +55,17 @@ export interface OfferRow {
 
 const OPEN_STATUSES = ["draft", "pending_approval", "approved", "extended"];
 
-export function listOffers(filters: OfferFilters = {}): OfferRow[] {
+export function listOffers(filters: OfferFilters = {}, actor?: User): OfferRow[] {
   const approver = alias(users, "approver");
   const conditions = [];
+
+  if (actor) {
+    const visible = visibleRequisitionIds(actor);
+    if (visible !== null) {
+      if (!visible.length) return [];
+      conditions.push(inArray(requisitions.id, visible));
+    }
+  }
 
   if (filters.status && filters.status !== "all") {
     if (filters.status === "open") conditions.push(inArray(offers.status, OPEN_STATUSES));
@@ -148,8 +158,8 @@ export function getOffer(offerId: string) {
 }
 
 /** Headline numbers for the offers page. */
-export function offerStats() {
-  const all = listOffers();
+export function offerStats(actor?: User) {
+  const all = listOffers({}, actor);
   const responded = all.filter((o) => ["accepted", "declined"].includes(o.status));
   const accepted = all.filter((o) => o.status === "accepted");
   const open = all.filter((o) => o.isOpen);
