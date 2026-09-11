@@ -4,6 +4,8 @@ import { and, asc, desc, eq, gte, inArray, like, lte, or, sql } from "drizzle-or
 
 import { db } from "@/db";
 import {
+  candidateEducation,
+  candidateExperience,
   candidates,
   clients,
   feedback,
@@ -20,6 +22,7 @@ import { ACTIVE_STAGES } from "@/lib/domain";
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { redactCandidate } from "@/server/authz";
+import { listAttachments } from "@/server/queries/attachments";
 
 export interface CandidateFilters {
   q?: string;
@@ -273,6 +276,23 @@ export async function getCandidate(candidateId: string, actor?: User) {
         )
     : [];
 
+  const education = (await db
+    .select()
+    .from(candidateEducation)
+    .where(eq(candidateEducation.candidateId, candidateId))
+    .orderBy(desc(candidateEducation.endYear))
+    );
+
+  const experience = (await db
+    .select()
+    .from(candidateExperience)
+    .where(eq(candidateExperience.candidateId, candidateId))
+    // Current role first, then most recent. A null end date sorts to the top.
+    .orderBy(desc(candidateExperience.startedOn))
+    );
+
+  const files = await listAttachments("candidate", candidateId);
+
   const candidateNotes = (await db
     .select({ note: notes, author: users })
     .from(notes)
@@ -297,6 +317,9 @@ export async function getCandidate(candidateId: string, actor?: User) {
     panelists,
     offers: offerRows,
     timeline,
+    education,
+    experience,
+    attachments: files,
     notes: candidateNotes,
     daysInSystem: daysBetween(candidate.createdAt),
   };

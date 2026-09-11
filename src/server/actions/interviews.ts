@@ -16,14 +16,25 @@ import {
 } from "@/db/schema";
 import type { User } from "@/db/schema";
 import {
+  FEEDBACK_SLA_HOURS,
   INTERVIEW_STAGES,
   INTERVIEW_TYPE,
+  PENDING_INTERVIEW_STATUSES,
+  RECOMMENDATION_SCORE,
   atOrPast,
+  type InterviewStatus,
   type InterviewType,
+  type Recommendation,
   type Stage,
 } from "@/lib/domain";
-import { feedbackSchema, interviewOutcomeSchema, interviewSchema } from "@/lib/validation";
+import {
+  declineFeedbackSchema,
+  feedbackSchema,
+  interviewOutcomeSchema,
+  interviewSchema,
+} from "@/lib/validation";
 import { can, canTouchRequisition } from "@/server/authz";
+import { scorecardForSubmission } from "@/server/queries/scorecards";
 import {
   denied,
   fail,
@@ -146,7 +157,9 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
         type: input.type,
         mode: input.mode,
         scheduledAt: when,
+        endsAt: new Date(when.getTime() + input.durationMinutes * 60_000),
         durationMinutes: input.durationMinutes,
+        timezone: input.timezone,
         locationOrLink: input.locationOrLink ?? null,
         status: "scheduled",
         outcome: "pending",
@@ -220,10 +233,37 @@ async function updateInterviewOutcomeImpl(actor: User, formData: FormData): Prom
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
 
 
+  const now = new Date();
+
+  // Completing a round starts the scorecard clock. It is set once and kept, so
+  // marking a round complete twice does not quietly grant another day.
+  const feedbackDueAt =
+    status === "completed"
+      ? (interview.feedbackDueAt ??
+        new Date(
+          Math.max(interview.endsAt.getTime(), now.getTime()) + FEEDBACK_SLA_HOURS * 3_600_000,
+        ))
+      : interview.feedbackDueAt;
+
   (await db.update(interviews)
-    .set({ status, outcome: status === "completed" ? outcome : "pending", updatedAt: new Date() })
+    .set({
+      status,
+      outcome: status === "completed" ? outcome : "pending",
+      feedbackDueAt,
+      updatedAt: now,
+    })
     .where(eq(interviews.id, interviewId))
     );
+
+  // Nobody owes a scorecard for a round that did not happen.
+  if (status === "cancelled" || status === "no_show" || status === "rescheduled") {
+    (await db.update(interviewPanel)
+      .set({ feedbackStatus: "declined" })
+      .where(
+        and(eq(interviewPanel.interviewId, interviewId), eq(interviewPanel.feedbackStatus, "pending")),
+      )
+      );
+  }
 
   await logActivity({
     entityType: "submission",
@@ -286,14 +326,29 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
     )
     )[0];
 
+  // Score only against the template this panel was actually given. A stale
+  // form posting a competency the template no longer has would otherwise write
+  // a key nothing knows how to render.
+  const template = await scorecardForSubmission(interview.submissionId);
+  const allowed = new Set(template.criteria.map((c) => c.key));
+  const scores: Record<string, number> = {};
+  for (const [key, value] of Object.entries(input.scores)) {
+    if (allowed.has(key)) scores[key] = value;
+  }
+
+  const missing = template.criteria.filter((c) => scores[c.key] === undefined);
+  if (missing.length) {
+    return fail("Score every competency before submitting.", {
+      [`scores.${missing[0]!.key}`]: "Required",
+    });
+  }
+
   const now = new Date();
   const values = {
     recommendation: input.recommendation,
     overall: input.overall,
-    technical: input.technical,
-    communication: input.communication,
-    problemSolving: input.problemSolving,
-    cultureFit: input.cultureFit,
+    templateId: template.id,
+    scores,
     strengths: input.strengths ?? "",
     concerns: input.concerns ?? "",
     notes: input.notes ?? "",
@@ -314,27 +369,31 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
       );
   }
 
-  // Once every panelist has weighed in, settle the interview outcome from
-  // the balance of recommendations rather than asking someone to restate it.
+  (await db.update(interviewPanel)
+    .set({ feedbackStatus: "submitted" })
+    .where(eq(interviewPanel.id, onPanel.id))
+    );
+
+  // Once everyone who still owes a scorecard has filed it, settle the round's
+  // outcome from the balance of recommendations rather than asking someone to
+  // restate a decision the scorecards already made. Panelists who stood down
+  // are not counted as outstanding.
   const all = (await db.select().from(feedback).where(eq(feedback.interviewId, input.interviewId)));
-  const panelSize = (await db
+  const outstanding = (await db
     .select({ count: sql<number>`count(*)::int` })
     .from(interviewPanel)
-    .where(eq(interviewPanel.interviewId, input.interviewId))
+    .where(
+      and(
+        eq(interviewPanel.interviewId, input.interviewId),
+        eq(interviewPanel.feedbackStatus, "pending"),
+      ),
+    )
     )[0]!.count;
 
-  if (all.length >= panelSize) {
+  if (outstanding === 0 && all.length) {
     const score =
-      all.reduce((sum, f) => {
-        const map: Record<string, number> = {
-          strong_hire: 2,
-          hire: 1,
-          lean_hire: 0.5,
-          lean_no_hire: -1,
-          no_hire: -2,
-        };
-        return sum + (map[f.recommendation] ?? 0);
-      }, 0) / all.length;
+      all.reduce((sum, f) => sum + (RECOMMENDATION_SCORE[f.recommendation as Recommendation] ?? 0), 0) /
+      all.length;
 
     const settled =
       score >= 1.5 ? "strong_yes" : score >= 0.75 ? "yes" : score > 0 ? "lean_yes" : score > -1 ? "lean_no" : score > -1.75 ? "no" : "strong_no";
@@ -343,7 +402,10 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
       .set({ status: "completed", outcome: settled, updatedAt: now })
       .where(eq(interviews.id, input.interviewId))
       );
-  } else if (interview.status === "scheduled" && interview.scheduledAt.getTime() < Date.now()) {
+  } else if (
+    PENDING_INTERVIEW_STATUSES.includes(interview.status as InterviewStatus) &&
+    interview.scheduledAt.getTime() < Date.now()
+  ) {
     (await db.update(interviews)
       .set({ status: "completed", updatedAt: now })
       .where(eq(interviews.id, input.interviewId))
@@ -399,6 +461,63 @@ async function cancelInterviewImpl(actor: User, formData: FormData): Promise<Act
 }
 
 
+/**
+ * Stand down from a round you cannot score (§10).
+ *
+ * The alternative is a scorecard that never arrives and an SLA that never
+ * clears, so the honest outcome is recorded rather than chased forever. The
+ * reason lands on the timeline — this is a visible act, not a quiet one.
+ */
+async function declineFeedbackImpl(actor: User, formData: FormData): Promise<ActionState> {
+  const parsed = parseForm(declineFeedbackSchema, formData);
+  if (!parsed.success) return parsed.state;
+  const { interviewId, interviewerId, reason } = parsed.data;
+
+  if (interviewerId !== actor.id && !can(actor, "feedback.view.all")) {
+    return fail("You can only stand down from your own rounds.");
+  }
+
+  const interview = (await db.select().from(interviews).where(eq(interviews.id, interviewId)))[0];
+  if (!interview) return fail("That interview no longer exists.");
+
+  const ctx = await context(interview.submissionId);
+  if (!ctx) return fail("That candidate is no longer in this pipeline.");
+
+  const seat = (await db
+    .select()
+    .from(interviewPanel)
+    .where(
+      and(eq(interviewPanel.interviewId, interviewId), eq(interviewPanel.userId, interviewerId)),
+    )
+    )[0];
+  if (!seat) return fail("That person is not on this panel.");
+  if (seat.feedbackStatus === "submitted") {
+    return fail("That scorecard has already been submitted.");
+  }
+
+  const person = (await db.select().from(users).where(eq(users.id, interviewerId)))[0];
+
+  (await db.update(interviewPanel)
+    .set({ feedbackStatus: "declined" })
+    .where(eq(interviewPanel.id, seat.id))
+    );
+
+  await logActivity({
+    entityType: "submission",
+    entityId: interview.submissionId,
+    type: "feedback_submitted",
+    actorId: actor.id,
+    summary: `${person?.name ?? "An interviewer"} stood down from ${interview.title}${reason ? ` — ${reason}` : ""}`,
+    meta: { requisitionId: ctx.requisition.id, candidateId: ctx.candidate.id, interviewId },
+  });
+
+  await syncInterviewStage(interview.submissionId, actor.id);
+
+  revalidatePath("/interviews");
+  revalidatePath(`/candidates/${ctx.candidate.id}`);
+  return succeed("Marked as stood down");
+}
+
 /* ---- Guarded exports -------------------------------------------- *
  * Each mutation is only reachable through its permission check.
  * ------------------------------------------------------------------ */
@@ -406,4 +525,5 @@ async function cancelInterviewImpl(actor: User, formData: FormData): Promise<Act
 export const scheduleInterview = guarded("interview.schedule", scheduleInterviewImpl);
 export const updateInterviewOutcome = guarded("interview.schedule", updateInterviewOutcomeImpl);
 export const submitFeedback = guarded("feedback.submit", submitFeedbackImpl);
+export const declineFeedback = guarded("feedback.submit", declineFeedbackImpl);
 export const cancelInterview = guarded("interview.cancel", cancelInterviewImpl);

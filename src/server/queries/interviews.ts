@@ -14,6 +14,7 @@ import {
   users,
 } from "@/db/schema";
 import type { User } from "@/db/schema";
+import { overdueBucket, type OverdueBucket } from "@/lib/domain";
 import { interviewScope } from "@/server/authz";
 
 export interface InterviewFilters {
@@ -22,6 +23,8 @@ export interface InterviewFilters {
   status?: string;
   interviewer?: string;
   requisition?: string;
+  /** Narrow to rounds whose scorecards have blown the SLA. */
+  overdueOnly?: boolean;
 }
 
 export interface InterviewRow {
@@ -33,6 +36,9 @@ export interface InterviewRow {
   status: string;
   outcome: string;
   scheduledAt: Date;
+  endsAt: Date;
+  /** IANA zone the round was booked in, so a distributed panel can see whose morning it is. */
+  timezone: string;
   /** Computed on the server so the client never reads the clock mid-render. */
   isUpcoming: boolean;
   durationMinutes: number;
@@ -47,11 +53,19 @@ export interface InterviewRow {
   requisitionTitle: string;
   clientName: string;
   organizerName: string;
-  panel: { id: string; name: string; role: string; hasFeedback: boolean }[];
+  panel: { id: string; name: string; role: string; hasFeedback: boolean; feedbackStatus: string }[];
   feedbackCount: number;
+  /** Panelists who still owe a scorecard — people who stood down are excluded. */
   panelSize: number;
+  outstandingFeedback: number;
+  /** When every scorecard was due, and how late it is now (§10). */
+  feedbackDueAt: Date | null;
+  hoursLate: number;
+  overdueBucket: OverdueBucket | null;
   avgRating: number | null;
   recommendations: string[];
+  /** The competencies this round's scorecards are filled against. */
+  scorecardTemplateId: string | null;
 }
 
 const DAY = 86_400_000;
@@ -132,7 +146,12 @@ export async function listInterviews(
   if (!ids.length) return [];
 
   const panelRows = (await db
-    .select({ interviewId: interviewPanel.interviewId, user: users, role: interviewPanel.role })
+    .select({
+      interviewId: interviewPanel.interviewId,
+      user: users,
+      role: interviewPanel.role,
+      feedbackStatus: interviewPanel.feedbackStatus,
+    })
     .from(interviewPanel)
     .innerJoin(users, eq(users.id, interviewPanel.userId))
     .where(inArray(interviewPanel.interviewId, ids))
@@ -149,10 +168,13 @@ export async function listInterviews(
     .where(inArray(feedback.interviewId, ids))
     );
 
-  const panelByInterview = new Map<string, { id: string; name: string; role: string }[]>();
+  const panelByInterview = new Map<
+    string,
+    { id: string; name: string; role: string; feedbackStatus: string }[]
+  >();
   for (const p of panelRows) {
     const list = panelByInterview.get(p.interviewId) ?? [];
-    list.push({ id: p.user.id, name: p.user.name, role: p.role });
+    list.push({ id: p.user.id, name: p.user.name, role: p.role, feedbackStatus: p.feedbackStatus });
     panelByInterview.set(p.interviewId, list);
   }
 
@@ -167,6 +189,9 @@ export async function listInterviews(
     const panel = panelByInterview.get(i.id) ?? [];
     const fbs = fbByInterview.get(i.id) ?? [];
     const submitted = new Set(fbs.map((f) => f.interviewerId));
+    const owed = panel.some((p) => p.feedbackStatus === "pending");
+    const hoursLate =
+      owed && i.feedbackDueAt ? Math.max(0, (now - i.feedbackDueAt.getTime()) / 3_600_000) : 0;
     return {
       id: i.id,
       round: i.round,
@@ -176,6 +201,8 @@ export async function listInterviews(
       status: i.status,
       outcome: i.outcome,
       scheduledAt: i.scheduledAt,
+      endsAt: i.endsAt,
+      timezone: i.timezone,
       isUpcoming: i.scheduledAt.getTime() > now,
       durationMinutes: i.durationMinutes,
       locationOrLink: i.locationOrLink,
@@ -192,8 +219,14 @@ export async function listInterviews(
       panel: panel.map((p) => ({ ...p, hasFeedback: submitted.has(p.id) })),
       feedbackCount: fbs.length,
       panelSize: panel.length,
+      // Someone who stood down is not outstanding — chasing them is noise.
+      outstandingFeedback: panel.filter((p) => p.feedbackStatus === "pending").length,
+      feedbackDueAt: i.feedbackDueAt,
+      hoursLate,
+      overdueBucket: overdueBucket(hoursLate),
       avgRating: fbs.length ? fbs.reduce((s, f) => s + f.overall, 0) / fbs.length : null,
       recommendations: fbs.map((f) => f.recommendation),
+      scorecardTemplateId: r.scorecardTemplateId,
     };
   });
 
@@ -201,18 +234,37 @@ export async function listInterviews(
     result = result.filter((r) => r.panel.some((p) => p.id === filters.interviewer));
   }
   if (filters.window === "awaiting_feedback") {
-    result = result.filter((r) => r.status === "completed" && r.feedbackCount < r.panelSize);
+    result = result.filter((r) => r.status === "completed" && r.outstandingFeedback > 0);
+  }
+  if (filters.overdueOnly) {
+    result = result.filter((r) => r.overdueBucket !== null);
   }
 
   return result;
 }
 
-/** Completed interviews where at least one panelist still owes feedback. */
+/**
+ * Completed rounds where somebody still owes a scorecard, most overdue first.
+ *
+ * Sorted by lateness rather than date, because the point of this list is the
+ * chase order: a round that is four days late outranks one from this morning.
+ */
 export async function awaitingFeedback(limit?: number, actor?: User) {
-  const rows = (await listInterviews({ window: "past", status: "completed" }, actor)).filter(
-    (r) => r.feedbackCount < r.panelSize,
-  );
+  const rows = (await listInterviews({ window: "past", status: "completed" }, actor))
+    .filter((r) => r.outstandingFeedback > 0)
+    .sort((a, b) => b.hoursLate - a.hoursLate);
   return limit ? rows.slice(0, limit) : rows;
+}
+
+/** The overdue-scorecard view, bucketed the way §10 asks to report it. */
+export async function feedbackSlaBuckets(actor?: User) {
+  const rows = await awaitingFeedback(undefined, actor);
+  const buckets = new Map<OverdueBucket | "on_time", InterviewRow[]>();
+  for (const row of rows) {
+    const key = row.overdueBucket ?? "on_time";
+    buckets.set(key, [...(buckets.get(key) ?? []), row]);
+  }
+  return buckets;
 }
 
 export async function getInterview(interviewId: string) {

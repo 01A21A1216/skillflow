@@ -5,7 +5,14 @@ import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 
 import type { Candidate } from "@/db/schema";
-import { CANDIDATE_STATUSES, SENIORITIES, SOURCES, WORK_AUTHORIZATIONS } from "@/lib/domain";
+import {
+  AVAILABILITIES,
+  CANDIDATE_STATUSES,
+  RATE_BASES,
+  SENIORITIES,
+  SOURCES,
+  WORK_AUTHORIZATIONS,
+} from "@/lib/domain";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/field";
 import { createCandidate, updateCandidate } from "@/server/actions/candidates";
@@ -154,6 +161,62 @@ export function CandidateFormModal({
                 {CANDIDATE_STATUSES.map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field
+              label="Primary technology"
+              hint="The one they lead with."
+              error={errors.primaryTechnology}
+            >
+              <Input
+                name="primaryTechnology"
+                defaultValue={candidate?.primaryTechnology ?? ""}
+                placeholder="Oracle EBS"
+              />
+            </Field>
+            <Field label="Availability" error={errors.availability}>
+              <Select name="availability" defaultValue={candidate?.availability ?? "one_month"}>
+                {AVAILABILITIES.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Available from" error={errors.availableFrom}>
+              <Input
+                name="availableFrom"
+                type="date"
+                defaultValue={candidate?.availableFrom ?? undefined}
+              />
+            </Field>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field
+              label="Contract rate"
+              hint="Leave empty for permanent-only candidates."
+              error={errors.expectedRate}
+            >
+              <Input
+                name="expectedRate"
+                type="number"
+                min={0}
+                step={1}
+                defaultValue={candidate?.expectedRate ?? undefined}
+                placeholder="85"
+              />
+            </Field>
+            <Field label="Rate basis" error={errors.rateBasis}>
+              <Select name="rateBasis" defaultValue={candidate?.rateBasis ?? "hourly"}>
+                {RATE_BASES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
                   </option>
                 ))}
               </Select>

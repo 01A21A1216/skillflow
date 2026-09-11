@@ -2,8 +2,10 @@ import type { ReactNode } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, Minus } from "lucide-react";
 
 import {
+  AVAILABILITY,
   CANDIDATE_STATUS,
   CLIENT_TIER,
+  FEEDBACK_STATUS,
   EMPLOYMENT_TYPE,
   INTERVIEW_MODE,
   INTERVIEW_STATUS,
@@ -12,6 +14,7 @@ import {
   OUTCOME,
   PRIORITY,
   RECOMMENDATION,
+  REQUISITION_SOURCE,
   REQ_STATUS,
   SENIORITY,
   SOURCE,
@@ -66,6 +69,9 @@ export const WorkModeBadge = metaBadge(WORK_MODE as AnyMeta);
 export const WorkAuthBadge = metaBadge(WORK_AUTHORIZATION as AnyMeta);
 export const SeniorityBadge = metaBadge(SENIORITY as AnyMeta);
 export const CandidateStatusBadge = metaBadge(CANDIDATE_STATUS as AnyMeta);
+export const AvailabilityBadge = metaBadge(AVAILABILITY as AnyMeta);
+export const RequisitionSourceBadge = metaBadge(REQUISITION_SOURCE as AnyMeta);
+export const FeedbackStatusBadge = metaBadge(FEEDBACK_STATUS as AnyMeta);
 export const SourceBadge = metaBadge(SOURCE as AnyMeta);
 export const InterviewTypeBadge = metaBadge(INTERVIEW_TYPE as AnyMeta);
 export const InterviewStatusBadge = metaBadge(INTERVIEW_STATUS as AnyMeta);

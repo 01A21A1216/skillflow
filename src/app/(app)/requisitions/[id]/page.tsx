@@ -25,11 +25,14 @@ import {
   ReqStatusBadge,
   SeniorityBadge,
   SkillChips,
+  RequisitionSourceBadge,
   StageBadge,
   WorkAuthBadge,
   WorkModeBadge,
 } from "@/components/domain/badges";
+import { AttachmentPanel } from "@/components/domain/attachment-panel";
 import { EditRequisitionButton } from "@/components/domain/forms/requisition-form";
+import { scorecardOptions } from "@/server/queries/scorecards";
 import { NoteComposer } from "@/components/domain/forms/pipeline-form";
 import { NotesList } from "@/components/domain/notes-list";
 import { PipelineBoard } from "@/components/domain/pipeline-board";
@@ -79,7 +82,18 @@ export default async function RequisitionDetailPage({
   const detail = await getRequisition(id, actor);
   if (!detail) notFound();
 
-  const { req, client, recruiter, hiringManager, team, pipeline, interviews, offers, notes } = detail;
+  const {
+    req,
+    client,
+    recruiter,
+    hiringManager,
+    backupRecruiter,
+    team,
+    pipeline,
+    interviews,
+    offers,
+    notes,
+  } = detail;
 
   const summary = (await listRequisitions({ status: "all" }, actor)).find((r) => r.id === id)!;
   const health = requisitionHealth(summary);
@@ -149,6 +163,7 @@ export default async function RequisitionDetailPage({
                 clients: facets.clients,
                 recruiters: facets.recruiters,
                 hiringManagers: await hiringManagerOptions(),
+                scorecards: await scorecardOptions(),
                 departments: facets.departments,
               }}
             />
@@ -468,6 +483,10 @@ export default async function RequisitionDetailPage({
                     : []),
                   { label: "Experience", value: `${req.experienceMin}–${req.experienceMax} yrs` },
                   { label: "Department", value: req.department },
+                  {
+                    label: "Came in as",
+                    value: <RequisitionSourceBadge value={req.source} size="sm" />,
+                  },
                   { label: "Client SLA", value: `${client.slaDays} days` },
                   {
                     label: "Days open",
@@ -479,6 +498,15 @@ export default async function RequisitionDetailPage({
               />
             </Card>
 
+            <AttachmentPanel
+              entityType="requisition"
+              entityId={req.id}
+              attachments={detail.attachments}
+              canUpload={can(actor, "attachment.upload")}
+              canDelete={can(actor, "attachment.delete")}
+              title="Brief and attachments"
+            />
+
             <Card>
               <CardHeader title="Working this requisition" />
               <ul className="mt-4 space-y-3">
@@ -486,6 +514,12 @@ export default async function RequisitionDetailPage({
                   <UserChip name={recruiter.name} meta={recruiter.title} />
                   <span className="shrink-0 text-[11px] text-content-subtle">Lead</span>
                 </li>
+                {backupRecruiter ? (
+                  <li className="flex items-center justify-between gap-3">
+                    <UserChip name={backupRecruiter.name} meta={backupRecruiter.title} />
+                    <span className="shrink-0 text-[11px] text-content-subtle">Backup</span>
+                  </li>
+                ) : null}
                 <li className="flex items-center justify-between gap-3">
                   <UserChip name={hiringManager.name} meta={hiringManager.title} />
                   <span className="shrink-0 text-[11px] text-content-subtle">Hiring manager</span>

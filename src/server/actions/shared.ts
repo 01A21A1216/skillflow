@@ -45,6 +45,17 @@ export function parseForm<T extends z.ZodTypeAny>(
   }
   for (const field of arrayFields) raw[field] ??= [];
 
+  // Dotted names build one level of nesting, so a scorecard can post
+  // `scores.technical=4` without the schema needing a column per competency.
+  for (const key of Object.keys(raw)) {
+    const dot = key.indexOf(".");
+    if (dot <= 0) continue;
+    const [group, field] = [key.slice(0, dot), key.slice(dot + 1)];
+    const bucket = (raw[group] ??= {}) as Record<string, unknown>;
+    bucket[field] = raw[key];
+    delete raw[key];
+  }
+
   // Unchecked checkboxes are simply absent from FormData.
   for (const key of ["willingToRelocate", "pinned"]) {
     if (key in raw) raw[key] = raw[key] === "on" || raw[key] === "true";

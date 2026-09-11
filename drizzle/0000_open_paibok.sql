@@ -10,6 +10,47 @@ CREATE TABLE "activities" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "attachments" (
+	"id" text PRIMARY KEY NOT NULL,
+	"entity_type" text NOT NULL,
+	"entity_id" text NOT NULL,
+	"kind" text DEFAULT 'document' NOT NULL,
+	"filename" text NOT NULL,
+	"content_type" text NOT NULL,
+	"size_bytes" integer NOT NULL,
+	"storage_key" text NOT NULL,
+	"digest" text DEFAULT '' NOT NULL,
+	"uploaded_by_id" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"deleted_at" timestamp with time zone,
+	"deleted_by" text
+);
+--> statement-breakpoint
+CREATE TABLE "candidate_education" (
+	"id" text PRIMARY KEY NOT NULL,
+	"candidate_id" text NOT NULL,
+	"institution" text NOT NULL,
+	"qualification" text NOT NULL,
+	"field" text DEFAULT '' NOT NULL,
+	"start_year" integer,
+	"end_year" integer,
+	"grade" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "candidate_experience" (
+	"id" text PRIMARY KEY NOT NULL,
+	"candidate_id" text NOT NULL,
+	"company" text NOT NULL,
+	"title" text NOT NULL,
+	"location" text DEFAULT '' NOT NULL,
+	"started_on" text NOT NULL,
+	"ended_on" text,
+	"summary" text DEFAULT '' NOT NULL,
+	"skills" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "candidates" (
 	"id" text PRIMARY KEY NOT NULL,
 	"first_name" text NOT NULL,
@@ -22,6 +63,7 @@ CREATE TABLE "candidates" (
 	"years_experience" real DEFAULT 0 NOT NULL,
 	"seniority" text DEFAULT 'mid' NOT NULL,
 	"skills" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"primary_technology" text DEFAULT '' NOT NULL,
 	"source" text NOT NULL,
 	"source_detail" text,
 	"referred_by_id" text,
@@ -31,6 +73,10 @@ CREATE TABLE "candidates" (
 	"current_salary" integer,
 	"currency" text DEFAULT 'USD' NOT NULL,
 	"notice_period_days" integer DEFAULT 14 NOT NULL,
+	"availability" text DEFAULT 'one_month' NOT NULL,
+	"available_from" text,
+	"expected_rate" integer,
+	"rate_basis" text DEFAULT 'hourly' NOT NULL,
 	"work_authorization" text DEFAULT 'citizen' NOT NULL,
 	"willing_to_relocate" boolean DEFAULT false NOT NULL,
 	"linkedin_url" text,
@@ -73,10 +119,8 @@ CREATE TABLE "feedback" (
 	"interviewer_id" text NOT NULL,
 	"recommendation" text NOT NULL,
 	"overall" integer NOT NULL,
-	"technical" integer NOT NULL,
-	"communication" integer NOT NULL,
-	"problem_solving" integer NOT NULL,
-	"culture_fit" integer NOT NULL,
+	"template_id" text,
+	"scores" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"strengths" text DEFAULT '' NOT NULL,
 	"concerns" text DEFAULT '' NOT NULL,
 	"notes" text DEFAULT '' NOT NULL,
@@ -88,7 +132,8 @@ CREATE TABLE "interview_panel" (
 	"id" text PRIMARY KEY NOT NULL,
 	"interview_id" text NOT NULL,
 	"user_id" text NOT NULL,
-	"role" text DEFAULT 'interviewer' NOT NULL
+	"role" text DEFAULT 'interviewer' NOT NULL,
+	"feedback_status" text DEFAULT 'pending' NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "interviews" (
@@ -99,11 +144,14 @@ CREATE TABLE "interviews" (
 	"type" text NOT NULL,
 	"mode" text DEFAULT 'video' NOT NULL,
 	"scheduled_at" timestamp with time zone NOT NULL,
+	"ends_at" timestamp with time zone NOT NULL,
 	"duration_minutes" integer DEFAULT 60 NOT NULL,
+	"timezone" text DEFAULT 'America/New_York' NOT NULL,
 	"location_or_link" text,
 	"status" text DEFAULT 'scheduled' NOT NULL,
 	"outcome" text DEFAULT 'pending' NOT NULL,
 	"organizer_id" text NOT NULL,
+	"feedback_due_at" timestamp with time zone,
 	"agenda" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -178,6 +226,9 @@ CREATE TABLE "requisitions" (
 	"client_id" text NOT NULL,
 	"hiring_manager_id" text NOT NULL,
 	"lead_recruiter_id" text NOT NULL,
+	"scorecard_template_id" text,
+	"backup_recruiter_id" text,
+	"source" text DEFAULT 'client_direct' NOT NULL,
 	"department" text NOT NULL,
 	"employment_type" text NOT NULL,
 	"work_mode" text NOT NULL,
@@ -224,6 +275,31 @@ CREATE TABLE "roles" (
 	"rank" integer DEFAULT 100 NOT NULL,
 	"is_system" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "scorecard_criteria" (
+	"id" text PRIMARY KEY NOT NULL,
+	"template_id" text NOT NULL,
+	"key" text NOT NULL,
+	"label" text NOT NULL,
+	"description" text DEFAULT '' NOT NULL,
+	"position" integer DEFAULT 0 NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "scorecard_templates" (
+	"id" text PRIMARY KEY NOT NULL,
+	"name" text NOT NULL,
+	"description" text DEFAULT '' NOT NULL,
+	"is_default" boolean DEFAULT false NOT NULL,
+	"active" boolean DEFAULT true NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"created_by" text,
+	"updated_by" text,
+	"deleted_at" timestamp with time zone,
+	"deleted_by" text,
+	"row_version" integer DEFAULT 1 NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "sessions" (
@@ -293,11 +369,15 @@ CREATE TABLE "users" (
 );
 --> statement-breakpoint
 ALTER TABLE "activities" ADD CONSTRAINT "activities_actor_id_users_id_fk" FOREIGN KEY ("actor_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "attachments" ADD CONSTRAINT "attachments_uploaded_by_id_users_id_fk" FOREIGN KEY ("uploaded_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "candidate_education" ADD CONSTRAINT "candidate_education_candidate_id_candidates_id_fk" FOREIGN KEY ("candidate_id") REFERENCES "public"."candidates"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "candidate_experience" ADD CONSTRAINT "candidate_experience_candidate_id_candidates_id_fk" FOREIGN KEY ("candidate_id") REFERENCES "public"."candidates"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "candidates" ADD CONSTRAINT "candidates_referred_by_id_users_id_fk" FOREIGN KEY ("referred_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "candidates" ADD CONSTRAINT "candidates_owner_id_users_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "clients" ADD CONSTRAINT "clients_account_owner_id_users_id_fk" FOREIGN KEY ("account_owner_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "feedback" ADD CONSTRAINT "feedback_interview_id_interviews_id_fk" FOREIGN KEY ("interview_id") REFERENCES "public"."interviews"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "feedback" ADD CONSTRAINT "feedback_interviewer_id_users_id_fk" FOREIGN KEY ("interviewer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "feedback" ADD CONSTRAINT "feedback_template_id_scorecard_templates_id_fk" FOREIGN KEY ("template_id") REFERENCES "public"."scorecard_templates"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "interview_panel" ADD CONSTRAINT "interview_panel_interview_id_interviews_id_fk" FOREIGN KEY ("interview_id") REFERENCES "public"."interviews"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "interview_panel" ADD CONSTRAINT "interview_panel_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "interviews" ADD CONSTRAINT "interviews_submission_id_submissions_id_fk" FOREIGN KEY ("submission_id") REFERENCES "public"."submissions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -311,8 +391,10 @@ ALTER TABLE "requisition_assignees" ADD CONSTRAINT "requisition_assignees_user_i
 ALTER TABLE "requisitions" ADD CONSTRAINT "requisitions_client_id_clients_id_fk" FOREIGN KEY ("client_id") REFERENCES "public"."clients"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "requisitions" ADD CONSTRAINT "requisitions_hiring_manager_id_users_id_fk" FOREIGN KEY ("hiring_manager_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "requisitions" ADD CONSTRAINT "requisitions_lead_recruiter_id_users_id_fk" FOREIGN KEY ("lead_recruiter_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "requisitions" ADD CONSTRAINT "requisitions_backup_recruiter_id_users_id_fk" FOREIGN KEY ("backup_recruiter_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "role_permissions" ADD CONSTRAINT "role_permissions_role_key_roles_key_fk" FOREIGN KEY ("role_key") REFERENCES "public"."roles"("key") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "role_permissions" ADD CONSTRAINT "role_permissions_permission_key_permissions_key_fk" FOREIGN KEY ("permission_key") REFERENCES "public"."permissions"("key") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "scorecard_criteria" ADD CONSTRAINT "scorecard_criteria_template_id_scorecard_templates_id_fk" FOREIGN KEY ("template_id") REFERENCES "public"."scorecard_templates"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "stage_events" ADD CONSTRAINT "stage_events_submission_id_submissions_id_fk" FOREIGN KEY ("submission_id") REFERENCES "public"."submissions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "stage_events" ADD CONSTRAINT "stage_events_actor_id_users_id_fk" FOREIGN KEY ("actor_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -323,6 +405,10 @@ CREATE INDEX "activity_entity_idx" ON "activities" USING btree ("entity_type","e
 CREATE INDEX "activity_time_idx" ON "activities" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "activity_actor_idx" ON "activities" USING btree ("actor_id");--> statement-breakpoint
 CREATE INDEX "activity_type_idx" ON "activities" USING btree ("type");--> statement-breakpoint
+CREATE INDEX "att_entity_idx" ON "attachments" USING btree ("entity_type","entity_id");--> statement-breakpoint
+CREATE INDEX "att_deleted_idx" ON "attachments" USING btree ("deleted_at");--> statement-breakpoint
+CREATE INDEX "edu_cand_idx" ON "candidate_education" USING btree ("candidate_id");--> statement-breakpoint
+CREATE INDEX "exp_cand_idx" ON "candidate_experience" USING btree ("candidate_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "cand_email_idx" ON "candidates" USING btree ("email");--> statement-breakpoint
 CREATE INDEX "cand_owner_idx" ON "candidates" USING btree ("owner_id");--> statement-breakpoint
 CREATE INDEX "cand_status_idx" ON "candidates" USING btree ("status");--> statement-breakpoint
@@ -330,6 +416,7 @@ CREATE INDEX "cand_deleted_idx" ON "candidates" USING btree ("deleted_at");--> s
 CREATE INDEX "client_deleted_idx" ON "clients" USING btree ("deleted_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "feedback_unique_idx" ON "feedback" USING btree ("interview_id","interviewer_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "panel_unique_idx" ON "interview_panel" USING btree ("interview_id","user_id");--> statement-breakpoint
+CREATE INDEX "panel_feedback_idx" ON "interview_panel" USING btree ("feedback_status");--> statement-breakpoint
 CREATE INDEX "iv_sub_idx" ON "interviews" USING btree ("submission_id");--> statement-breakpoint
 CREATE INDEX "iv_time_idx" ON "interviews" USING btree ("scheduled_at");--> statement-breakpoint
 CREATE INDEX "iv_status_idx" ON "interviews" USING btree ("status");--> statement-breakpoint
@@ -347,6 +434,8 @@ CREATE INDEX "req_recruiter_idx" ON "requisitions" USING btree ("lead_recruiter_
 CREATE INDEX "req_deleted_idx" ON "requisitions" USING btree ("deleted_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "role_permission_idx" ON "role_permissions" USING btree ("role_key","permission_key");--> statement-breakpoint
 CREATE INDEX "role_permission_role_idx" ON "role_permissions" USING btree ("role_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "criteria_unique_idx" ON "scorecard_criteria" USING btree ("template_id","key");--> statement-breakpoint
+CREATE UNIQUE INDEX "scorecard_name_idx" ON "scorecard_templates" USING btree ("name");--> statement-breakpoint
 CREATE UNIQUE INDEX "session_token_idx" ON "sessions" USING btree ("token_hash");--> statement-breakpoint
 CREATE INDEX "session_user_idx" ON "sessions" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "stage_event_sub_idx" ON "stage_events" USING btree ("submission_id");--> statement-breakpoint

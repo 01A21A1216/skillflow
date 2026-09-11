@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import {
   Briefcase,
   CalendarDays,
+  GraduationCap,
   FileSignature,
   Link2,
   Mail,
@@ -16,6 +17,7 @@ import {
 import { PageBody, PageHeader } from "@/components/layout/page-header";
 import { ActivityFeed } from "@/components/domain/activity-feed";
 import {
+  AvailabilityBadge,
   CandidateStatusBadge,
   InterviewStatusBadge,
   InterviewTypeBadge,
@@ -29,7 +31,9 @@ import {
   StageBadge,
   SubmissionStatusBadge,
 } from "@/components/domain/badges";
+import { AttachmentPanel } from "@/components/domain/attachment-panel";
 import { EditCandidateButton } from "@/components/domain/forms/candidate-form";
+import { scorecardMap } from "@/server/queries/scorecards";
 import { AddToPipelineButton, NoteComposer } from "@/components/domain/forms/pipeline-form";
 import { NotesList } from "@/components/domain/notes-list";
 import { RowActions } from "@/components/domain/pipeline-actions";
@@ -37,8 +41,13 @@ import { Avatar } from "@/components/ui/avatar";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Meter, RatingStars } from "@/components/ui/misc";
-import { FEEDBACK_COMPETENCIES, WORK_AUTHORIZATIONS, type Stage } from "@/lib/domain";
-import { average, formatDate, formatDateTime, formatMoney, pluralize } from "@/lib/utils";
+import {
+  RATE_BASIS,
+  WORK_AUTHORIZATIONS,
+  type RateBasis,
+  type Stage,
+} from "@/lib/domain";
+import { average, formatDate, formatDateTime, formatMoney, formatMonth, pluralize } from "@/lib/utils";
 import { candidateActivity } from "@/server/queries/dashboard";
 import { candidateFacets, getCandidate } from "@/server/queries/candidates";
 import { openRequisitionOptions } from "@/server/queries/pipeline";
@@ -69,11 +78,23 @@ export default async function CandidateDetailPage({
   const detail = await getCandidate(id, actor);
   if (!detail) notFound();
 
-  const { candidate: c, owner, submissions, interviews, feedback, offers, notes } = detail;
+  const {
+    candidate: c,
+    owner,
+    submissions,
+    interviews,
+    feedback,
+    offers,
+    notes,
+    education,
+    experience,
+    attachments,
+  } = detail;
   const name = `${c.firstName} ${c.lastName}`;
   const activity = await candidateActivity(c.id, 25);
   const openReqs = await openRequisitionOptions(c.id);
   const facets = await candidateFacets();
+  const scorecardsByTemplate = await scorecardMap();
 
   const active = submissions.filter((s) => s.submission.status === "active");
   const hired = submissions.find((s) => s.submission.status === "hired");
@@ -82,12 +103,27 @@ export default async function CandidateDetailPage({
   const ratings = feedback.map((f) => f.feedback.overall);
   const avgRating = ratings.length ? average(ratings) : null;
 
-  const competencyAverages = FEEDBACK_COMPETENCIES.map((comp) => ({
-    ...comp,
-    value: feedback.length
-      ? average(feedback.map((f) => f.feedback[comp.key as keyof typeof f.feedback] as number))
-      : 0,
-  }));
+  // Scorecards are template-driven, so a candidate interviewed against two
+  // requirements can carry two different sets of competencies. Averaging is
+  // done per key over the scorecards that actually scored it, rather than
+  // treating a missing competency as a zero.
+  const competencyAverages = (() => {
+    const totals = new Map<string, { label: string; sum: number; n: number }>();
+    for (const f of feedback) {
+      const card = scorecardsByTemplate[f.feedback.templateId ?? "__default__"];
+      for (const [key, score] of Object.entries(f.feedback.scores ?? {})) {
+        if (typeof score !== "number") continue;
+        const label = card?.criteria.find((c) => c.key === key)?.label ?? key.replace(/_/g, " ");
+        const entry = totals.get(key) ?? { label, sum: 0, n: 0 };
+        entry.sum += score;
+        entry.n += 1;
+        totals.set(key, entry);
+      }
+    }
+    return [...totals.entries()]
+      .map(([key, t]) => ({ key, label: t.label, value: t.sum / t.n, samples: t.n }))
+      .sort((a, b) => b.value - a.value);
+  })();
 
   return (
     <>
@@ -308,6 +344,86 @@ export default async function CandidateDetailPage({
               )}
             </Card>
 
+            {/* Experience */}
+            {experience.length ? (
+              <Card padded={false}>
+                <div className="p-5 pb-4">
+                  <CardHeader
+                    icon={<Briefcase className="size-4" />}
+                    title="Experience"
+                    description={`${pluralize(experience.length, "role")} on record.`}
+                  />
+                </div>
+                <ol className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
+                  {experience.map((e) => (
+                    <li key={e.id} className="px-5 py-3.5">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                        <p className="text-[13.5px] font-medium text-content">
+                          {e.title}
+                          <span className="font-normal text-content-muted"> · {e.company}</span>
+                        </p>
+                        <p className="text-[11.5px] text-content-subtle tabular-nums">
+                          {formatMonth(e.startedOn)} — {e.endedOn ? formatMonth(e.endedOn) : "present"}
+                        </p>
+                      </div>
+                      {e.location ? (
+                        <p className="mt-0.5 text-[11.5px] text-content-subtle">{e.location}</p>
+                      ) : null}
+                      {e.summary ? (
+                        <p className="mt-1.5 text-[12.5px] leading-relaxed text-content-muted">
+                          {e.summary}
+                        </p>
+                      ) : null}
+                      {e.skills.length ? (
+                        <div className="mt-2">
+                          <SkillChips skills={e.skills} max={6} />
+                        </div>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              </Card>
+            ) : null}
+
+            {/* Education */}
+            {education.length ? (
+              <Card padded={false}>
+                <div className="p-5 pb-4">
+                  <CardHeader icon={<GraduationCap className="size-4" />} title="Education" />
+                </div>
+                <ul className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
+                  {education.map((e) => (
+                    <li
+                      key={e.id}
+                      className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-5 py-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-[13.5px] font-medium text-content">
+                          {e.qualification}
+                          {e.field ? ` ${e.field}` : ""}
+                        </p>
+                        <p className="mt-0.5 text-[12px] text-content-muted">{e.institution}</p>
+                      </div>
+                      <p className="text-[11.5px] text-content-subtle tabular-nums">
+                        {e.startYear ? `${e.startYear}–` : ""}
+                        {e.endYear ?? ""}
+                        {e.grade ? ` · ${e.grade}` : ""}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ) : null}
+
+            {/* Files */}
+            <AttachmentPanel
+              entityType="candidate"
+              entityId={c.id}
+              attachments={attachments}
+              canUpload={can(actor, "attachment.upload")}
+              canDelete={can(actor, "attachment.delete")}
+            />
+
             {/* Offers */}
             {offers.length ? (
               <Card padded={false}>
@@ -413,6 +529,27 @@ export default async function CandidateDetailPage({
                   {
                     label: "Notice",
                     value: c.noticePeriodDays ? `${c.noticePeriodDays} days` : "Immediate",
+                  },
+                  {
+                    label: "Availability",
+                    value: (
+                      <span className="inline-flex items-center gap-1.5">
+                        <AvailabilityBadge value={c.availability} size="sm" />
+                        {c.availableFrom ? (
+                          <span className="text-content-subtle">from {formatDate(c.availableFrom)}</span>
+                        ) : null}
+                      </span>
+                    ),
+                  },
+                  {
+                    label: "Primary technology",
+                    value: c.primaryTechnology || "—",
+                  },
+                  {
+                    label: "Contract rate",
+                    value: c.expectedRate
+                      ? `${formatMoney(c.expectedRate, c.currency)} ${RATE_BASIS[c.rateBasis as RateBasis]?.label ?? ""}`
+                      : "Not quoted",
                   },
                   { label: "Relocation", value: c.willingToRelocate ? "Open" : "In-market only" },
                   {

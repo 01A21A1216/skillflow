@@ -6,8 +6,10 @@ import { useRouter } from "next/navigation";
 import { Clock, MapPin, MoreHorizontal, ThumbsUp, Video, X } from "lucide-react";
 
 import type { InterviewRow } from "@/server/queries/interviews";
+import { PENDING_INTERVIEW_STATUSES, type InterviewStatus } from "@/lib/domain";
 import { cancelInterview } from "@/server/actions/interviews";
 import { cn, formatDate, formatTime } from "@/lib/utils";
+import { useIsHydrated } from "@/lib/browser-store";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuItem } from "@/components/ui/misc";
@@ -18,7 +20,7 @@ import {
   InterviewTypeBadge,
   OutcomeBadge,
 } from "./badges";
-import { FeedbackModal } from "./forms/feedback-form";
+import { FeedbackModal, useScorecard } from "./forms/feedback-form";
 
 export function InterviewDayGroups({
   groups,
@@ -69,6 +71,37 @@ export function InterviewDayGroups({
   );
 }
 
+/**
+ * Names the zone a round was booked in, but only when it is not the viewer's.
+ *
+ * The time above is rendered in the reader's own zone, which is right for them
+ * and silently wrong for a panel spread across continents — "9:00" means a very
+ * different morning in Austin and Bangalore. Reading the viewer's zone is a
+ * browser-only fact, so it renders after hydration rather than guessing on the
+ * server and mismatching.
+ */
+function TimezoneNote({ scheduledAt, timezone }: { scheduledAt: Date; timezone: string }) {
+  const hydrated = useIsHydrated();
+  if (!hydrated) return null;
+
+  const viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!viewerZone || viewerZone === timezone) return null;
+
+  const there = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+  }).format(scheduledAt);
+
+  const label = timezone.split("/").pop()?.replace(/_/g, " ") ?? timezone;
+
+  return (
+    <p className="mt-1 text-[10.5px] text-content-subtle" title={`Booked in ${timezone}`}>
+      {there} in {label}
+    </p>
+  );
+}
+
 export function InterviewRowCard({
   interview: iv,
   highlight = false,
@@ -81,9 +114,10 @@ export function InterviewRowCard({
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
-  const missing = iv.panelSize - iv.feedbackCount;
+  const missing = iv.outstandingFeedback;
   const needsFeedback = iv.status === "completed" && missing > 0;
   const upcoming = iv.isUpcoming;
+  const scorecard = useScorecard(iv.scorecardTemplateId);
 
   async function doCancel() {
     setCancelling(true);
@@ -108,13 +142,17 @@ export function InterviewRowCard({
     >
       <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
         {/* Time block */}
-        <div className="w-[4.5rem] shrink-0">
+        <div className="w-[5.5rem] shrink-0">
           <p className="text-[15px] leading-none font-semibold text-content tabular-nums">
             {formatTime(iv.scheduledAt)}
           </p>
           <p className="mt-1 text-[11px] text-content-subtle tabular-nums">
-            {iv.durationMinutes} min
+            to {formatTime(iv.endsAt)}
           </p>
+          {/* The zone the round was booked in. Shown only when it differs from
+              the viewer's, because that is the only time it tells them
+              anything — and the only time the time above can mislead. */}
+          <TimezoneNote scheduledAt={iv.scheduledAt} timezone={iv.timezone} />
         </div>
 
         {/* Main */}
@@ -142,9 +180,22 @@ export function InterviewRowCard({
             <InterviewStatusBadge value={iv.status} />
             {iv.outcome !== "pending" ? <OutcomeBadge value={iv.outcome} /> : null}
             {needsFeedback ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-[hsl(var(--tone-amber-bg))] px-2 py-0.5 text-[11px] font-medium text-[hsl(var(--tone-amber))]">
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+                  iv.overdueBucket
+                    ? "bg-[hsl(var(--tone-rose-bg))] text-[hsl(var(--tone-rose))]"
+                    : "bg-[hsl(var(--tone-amber-bg))] text-[hsl(var(--tone-amber))]",
+                )}
+                title={
+                  iv.feedbackDueAt
+                    ? `Due ${iv.feedbackDueAt.toLocaleString()}`
+                    : "No due date recorded"
+                }
+              >
                 <Clock className="size-3" />
-                {missing} scorecard{missing === 1 ? "" : "s"} outstanding
+                {missing} scorecard{missing === 1 ? "" : "s"}{" "}
+                {iv.overdueBucket ? `${Math.round(iv.hoursLate)}h overdue` : "outstanding"}
               </span>
             ) : null}
           </div>
@@ -229,7 +280,7 @@ export function InterviewRowCard({
                 >
                   Open requisition
                 </MenuItem>
-                {upcoming && iv.status === "scheduled" ? (
+                {upcoming && PENDING_INTERVIEW_STATUSES.includes(iv.status as InterviewStatus) ? (
                   <MenuItem
                     danger
                     disabled={cancelling}
@@ -261,6 +312,7 @@ export function InterviewRowCard({
         interviewTitle={iv.title}
         candidateName={iv.candidateName}
         panel={iv.panel}
+        scorecard={scorecard}
       />
     </li>
   );

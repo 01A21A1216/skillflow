@@ -67,6 +67,30 @@ export function formatDate(value: Date | number | string | null | undefined, wit
   });
 }
 
+/**
+ * A `YYYY-MM` month, as "Mar 2024".
+ *
+ * Work history is stored to the month, not the day, because that is what a CV
+ * actually says — parsing it into a full date would invent precision.
+ */
+export function formatMonth(value: string | null | undefined) {
+  if (!value) return "—";
+  const [year, month] = value.split("-").map(Number);
+  if (!year || !month) return value;
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** Bytes as the shortest human-readable unit, e.g. "1.4 MB". */
+export function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export function formatDateTime(value: Date | number | string | null | undefined) {
   const d = toDate(value);
   if (!d) return "—";

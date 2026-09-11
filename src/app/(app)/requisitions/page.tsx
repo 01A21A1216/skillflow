@@ -5,6 +5,7 @@ import { Briefcase, MapPin } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/layout/page-header";
 import { FilterBar, SortSelect } from "@/components/domain/filter-bar";
 import { NewRequisitionButton } from "@/components/domain/forms/requisition-form";
+import { scorecardOptions } from "@/server/queries/scorecards";
 import {
   EmploymentBadge,
   HealthBadge,
@@ -106,6 +107,7 @@ export default async function RequisitionsPage({
               clients: facets.clients,
               recruiters: facets.recruiters,
               hiringManagers: await hiringManagerOptions(),
+                scorecards: await scorecardOptions(),
               departments: facets.departments,
             }}
           />

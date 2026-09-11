@@ -29,6 +29,7 @@ import {
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { requisitionScope, visibleRequisitionIds } from "@/server/authz";
+import { listAttachments } from "@/server/queries/attachments";
 
 export interface RequisitionFilters {
   q?: string;
@@ -417,9 +418,15 @@ export async function getRequisition(reqId: string, actor?: User) {
     stageCounts[p.submission.stage] = (stageCounts[p.submission.stage] ?? 0) + 1;
   }
 
+  const backupRecruiter = row.req.backupRecruiterId
+    ? ((await db.select().from(users).where(eq(users.id, row.req.backupRecruiterId)))[0] ?? null)
+    : null;
+
   return {
     ...row,
     team,
+    backupRecruiter,
+    attachments: await listAttachments("requisition", reqId),
     pipeline,
     interviews: reqInterviews,
     offers: reqOffers,

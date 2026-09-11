@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   AUTHORED_REQ_STATUSES,
+  AVAILABILITIES,
   CANDIDATE_STATUSES,
   DECLINE_REASONS,
   EMPLOYMENT_TYPES,
@@ -13,6 +14,8 @@ import {
   RECOMMENDATIONS,
   REJECTION_REASONS,
   SENIORITIES,
+  RATE_BASES,
+  REQUISITION_SOURCES,
   SOURCES,
   WORK_AUTHORIZATIONS,
   WORK_MODES,
@@ -59,6 +62,9 @@ export const requisitionSchema = z
     clientId: nonEmpty("Client"),
     hiringManagerId: nonEmpty("Hiring manager"),
     leadRecruiterId: nonEmpty("Lead recruiter"),
+    backupRecruiterId: optionalText(60),
+    source: z.enum(values(REQUISITION_SOURCES)).default("client_direct"),
+    scorecardTemplateId: optionalText(60),
     department: nonEmpty("Department", 80),
     employmentType: z.enum(values(EMPLOYMENT_TYPES)),
     workMode: z.enum(values(WORK_MODES)),
@@ -83,6 +89,10 @@ export const requisitionSchema = z
       .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
       .optional()
       .or(z.literal("").transform(() => undefined)),
+  })
+  .refine((d) => !d.backupRecruiterId || d.backupRecruiterId !== d.leadRecruiterId, {
+    message: "Backup must be someone other than the lead",
+    path: ["backupRecruiterId"],
   })
   .refine((d) => d.minSalary == null || d.maxSalary == null || d.maxSalary >= d.minSalary, {
     message: "Maximum salary must be at least the minimum",
@@ -120,6 +130,15 @@ export const candidateSchema = z.object({
   expectedSalary: money.optional(),
   currentSalary: money.optional(),
   noticePeriodDays: z.coerce.number().int().min(0).max(180).default(14),
+  primaryTechnology: optionalText(80),
+  availability: z.enum(values(AVAILABILITIES)).default("one_month"),
+  availableFrom: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  expectedRate: z.coerce.number().int().min(0).max(10_000).optional(),
+  rateBasis: z.enum(values(RATE_BASES)).default("hourly"),
   workAuthorization: z.enum(values(WORK_AUTHORIZATIONS)),
   willingToRelocate: z.coerce.boolean().default(false),
   linkedinUrl: z
@@ -185,6 +204,8 @@ export const interviewSchema = z.object({
   mode: z.enum(values(INTERVIEW_MODES)),
   scheduledAt: z.string().min(1, "Pick a date and time"),
   durationMinutes: z.coerce.number().int().min(15).max(480),
+  /** IANA zone the time above was entered in. */
+  timezone: nonEmpty("Timezone", 60).default("America/New_York"),
   locationOrLink: optionalText(300),
   agenda: optionalText(1000),
   panelIds: z.array(z.string()).min(1, "Add at least one interviewer"),
@@ -193,24 +214,33 @@ export const interviewSchema = z.object({
 
 export const interviewOutcomeSchema = z.object({
   interviewId: nonEmpty("Interview"),
-  status: z.enum(["scheduled", "completed", "cancelled", "no_show", "rescheduled"]),
+  status: z.enum(["scheduled", "confirmed", "completed", "cancelled", "no_show", "rescheduled"]),
   outcome: z
     .enum(["strong_yes", "yes", "lean_yes", "lean_no", "no", "strong_no", "pending"])
     .default("pending"),
 });
 
+/**
+ * A scorecard. The competencies are whatever the template says, so the scores
+ * arrive as a keyed map rather than named columns — validated for shape here
+ * and checked against the actual template in the action.
+ */
 export const feedbackSchema = z.object({
   interviewId: nonEmpty("Interview"),
   interviewerId: nonEmpty("Interviewer"),
   recommendation: z.enum(values(RECOMMENDATIONS)),
   overall: z.coerce.number().int().min(1).max(5),
-  technical: z.coerce.number().int().min(1).max(5),
-  communication: z.coerce.number().int().min(1).max(5),
-  problemSolving: z.coerce.number().int().min(1).max(5),
-  cultureFit: z.coerce.number().int().min(1).max(5),
+  scores: z.record(z.string().max(60), z.coerce.number().int().min(1).max(5)).default({}),
   strengths: optionalText(2000),
   concerns: optionalText(2000),
   notes: optionalText(4000),
+});
+
+/** An interviewer standing down from a round they cannot score. */
+export const declineFeedbackSchema = z.object({
+  interviewId: nonEmpty("Interview"),
+  interviewerId: nonEmpty("Interviewer"),
+  reason: optionalText(500),
 });
 
 /* ------------------------------------------------------------------ *

@@ -36,7 +36,7 @@ async function nextReqCode() {
 }
 
 async function createRequisitionImpl(actor: User, formData: FormData): Promise<ActionState> {
-  const parsed = parseForm(requisitionSchema, formData);
+  const parsed = parseForm(requisitionSchema, formData, ["visaRequirements"]);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
@@ -107,7 +107,7 @@ async function updateRequisitionImpl(actor: User, formData: FormData): Promise<A
   const requisitionId = String(formData.get("requisitionId") ?? "");
   if (!requisitionId) return fail("Missing requisition.");
 
-  const parsed = parseForm(requisitionSchema, formData);
+  const parsed = parseForm(requisitionSchema, formData, ["visaRequirements"]);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 

@@ -31,3 +31,6 @@ yarn-error.log*
 
 # local editor/agent scratch
 /.claude/
+
+# attachment bytes (see src/server/storage.ts)
+/storage/

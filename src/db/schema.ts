@@ -169,6 +169,12 @@ export const requisitions = pgTable(
     leadRecruiterId: text("lead_recruiter_id")
       .notNull()
       .references(() => users.id),
+    /** Scorecard this requirement's panels fill in. Null falls back to the default. */
+    scorecardTemplateId: text("scorecard_template_id"),
+    /** Cover for the lead. Named on the requirement so escalation has an owner. */
+    backupRecruiterId: text("backup_recruiter_id").references(() => users.id),
+    /** How the requirement reached us — client direct, RFP, repeat business (§5). */
+    source: text("source").notNull().default("client_direct"),
     department: text("department").notNull(),
     employmentType: text("employment_type").notNull(),
     workMode: text("work_mode").notNull(),
@@ -245,6 +251,8 @@ export const candidates = pgTable(
     yearsExperience: real("years_experience").notNull().default(0),
     seniority: text("seniority").notNull().default("mid"),
     skills: jsonb("skills").$type<string[]>().notNull().default([]),
+    /** The one technology they lead with — what a recruiter searches on first. */
+    primaryTechnology: text("primary_technology").notNull().default(""),
     source: text("source").notNull(),
     sourceDetail: text("source_detail"),
     referredById: text("referred_by_id").references(() => users.id),
@@ -256,6 +264,12 @@ export const candidates = pgTable(
     currentSalary: integer("current_salary"),
     currency: text("currency").notNull().default("USD"),
     noticePeriodDays: integer("notice_period_days").notNull().default(14),
+    /** What they will commit to, as opposed to what their contract says. */
+    availability: text("availability").notNull().default("one_month"),
+    availableFrom: text("available_from"),
+    /** Contract rate. `expectedSalary` stays the permanent-role number. */
+    expectedRate: integer("expected_rate"),
+    rateBasis: text("rate_basis").notNull().default("hourly"),
     workAuthorization: text("work_authorization").notNull().default("citizen"),
     willingToRelocate: boolean("willing_to_relocate").notNull().default(false),
     linkedinUrl: text("linkedin_url"),
@@ -272,6 +286,85 @@ export const candidates = pgTable(
     index("cand_owner_idx").on(t.ownerId),
     index("cand_status_idx").on(t.status),
     index("cand_deleted_idx").on(t.deletedAt),
+  ],
+);
+
+/**
+ * Education and work history.
+ *
+ * Separate tables rather than a jsonb blob on the candidate, because the
+ * Candidate 360 renders them as ordered sections and a resume parser will
+ * write rows here one at a time.
+ */
+export const candidateEducation = pgTable(
+  "candidate_education",
+  {
+    id: pk(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => candidates.id, { onDelete: "cascade" }),
+    institution: text("institution").notNull(),
+    qualification: text("qualification").notNull(),
+    field: text("field").notNull().default(""),
+    startYear: integer("start_year"),
+    endYear: integer("end_year"),
+    grade: text("grade"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("edu_cand_idx").on(t.candidateId)],
+);
+
+export const candidateExperience = pgTable(
+  "candidate_experience",
+  {
+    id: pk(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => candidates.id, { onDelete: "cascade" }),
+    company: text("company").notNull(),
+    title: text("title").notNull(),
+    location: text("location").notNull().default(""),
+    /** ISO month, `YYYY-MM`. Null `endedOn` means this is the current role. */
+    startedOn: text("started_on").notNull(),
+    endedOn: text("ended_on"),
+    summary: text("summary").notNull().default(""),
+    skills: jsonb("skills").$type<string[]>().notNull().default([]),
+    createdAt: createdAt(),
+  },
+  (t) => [index("exp_cand_idx").on(t.candidateId)],
+);
+
+/**
+ * Files attached to any record — resumes, job descriptions, client briefs.
+ *
+ * The bytes live behind a storage port (`src/server/storage.ts`), so this row
+ * holds only the key to fetch them by. Nothing here assumes a local disk or a
+ * particular cloud provider (§22), and nothing is served from a guessable path
+ * (§23) — reads go through a permission-checked route.
+ */
+export const attachments = pgTable(
+  "attachments",
+  {
+    id: pk(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    kind: text("kind").notNull().default("document"),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    storageKey: text("storage_key").notNull(),
+    /** Content hash, so the same file uploaded twice is recognised. */
+    digest: text("digest").notNull().default(""),
+    uploadedById: text("uploaded_by_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: createdAt(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: text("deleted_by"),
+  },
+  (t) => [
+    index("att_entity_idx").on(t.entityType, t.entityId),
+    index("att_deleted_idx").on(t.deletedAt),
   ],
 );
 
@@ -345,13 +438,23 @@ export const interviews = pgTable(
     type: text("type").notNull(),
     mode: text("mode").notNull().default("video"),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    /** Stored, not derived, so a round that overran records what actually happened. */
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     durationMinutes: integer("duration_minutes").notNull().default(60),
+    /**
+     * IANA zone the interview was *booked* in. Instants are absolute; this is
+     * how to say "9am in the candidate's morning" to a panel spread over three
+     * continents without everyone doing the arithmetic themselves (§10).
+     */
+    timezone: text("timezone").notNull().default("America/New_York"),
     locationOrLink: text("location_or_link"),
     status: text("status").notNull().default("scheduled"),
     outcome: text("outcome").notNull().default("pending"),
     organizerId: text("organizer_id")
       .notNull()
       .references(() => users.id),
+    /** When every scorecard was due. Set from the SLA when the round completes. */
+    feedbackDueAt: timestamp("feedback_due_at", { withTimezone: true }),
     agenda: text("agenda"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -376,8 +479,60 @@ export const interviewPanel = pgTable(
       .notNull()
       .references(() => users.id),
     role: text("role").notNull().default("interviewer"),
+    /**
+     * Whether this panelist still owes a scorecard (§10).
+     *
+     * Held here rather than inferred from the absence of a `feedback` row,
+     * because "declined" and "has not got to it yet" are different facts and
+     * only one of them is chaseable.
+     */
+    feedbackStatus: text("feedback_status").notNull().default("pending"),
   },
-  (t) => [uniqueIndex("panel_unique_idx").on(t.interviewId, t.userId)],
+  (t) => [
+    uniqueIndex("panel_unique_idx").on(t.interviewId, t.userId),
+    index("panel_feedback_idx").on(t.feedbackStatus),
+  ],
+);
+
+/**
+ * Scorecard templates (§11).
+ *
+ * A template is a named set of competencies. Requirements point at one; a
+ * panel without one falls back to the default. Because the criteria are rows
+ * and the scores are a keyed map, adding a competency is an admin edit rather
+ * than a migration.
+ */
+export const scorecardTemplates = pgTable(
+  "scorecard_templates",
+  {
+    id: pk(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    /** Exactly one template is the fallback for requirements that name none. */
+    isDefault: boolean("is_default").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    ...stewardship(),
+  },
+  (t) => [uniqueIndex("scorecard_name_idx").on(t.name)],
+);
+
+export const scorecardCriteria = pgTable(
+  "scorecard_criteria",
+  {
+    id: pk(),
+    templateId: text("template_id")
+      .notNull()
+      .references(() => scorecardTemplates.id, { onDelete: "cascade" }),
+    /** Stable key the scores map is written against. */
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    description: text("description").notNull().default(""),
+    position: integer("position").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("criteria_unique_idx").on(t.templateId, t.key)],
 );
 
 export const feedback = pgTable(
@@ -392,10 +547,10 @@ export const feedback = pgTable(
       .references(() => users.id),
     recommendation: text("recommendation").notNull(),
     overall: integer("overall").notNull(),
-    technical: integer("technical").notNull(),
-    communication: integer("communication").notNull(),
-    problemSolving: integer("problem_solving").notNull(),
-    cultureFit: integer("culture_fit").notNull(),
+    /** Template this scorecard was filled against, so old ones stay readable. */
+    templateId: text("template_id").references(() => scorecardTemplates.id),
+    /** `{ criterionKey: 1..5 }` — the shape follows the template, not the schema. */
+    scores: jsonb("scores").$type<Record<string, number>>().notNull().default({}),
     strengths: text("strengths").notNull().default(""),
     concerns: text("concerns").notNull().default(""),
     notes: text("notes").notNull().default(""),

@@ -7,6 +7,7 @@ import { Plus } from "lucide-react";
 import type { Requisition } from "@/db/schema";
 import {
   AUTHORED_REQ_STATUSES,
+  REQUISITION_SOURCES,
   EMPLOYMENT_TYPES,
   PRIORITIES,
   SENIORITIES,
@@ -23,6 +24,7 @@ export interface RequisitionFormOptions {
   recruiters: { id: string; name: string }[];
   hiringManagers: { id: string; name: string; department: string }[];
   departments: string[];
+  scorecards?: { id: string; name: string }[];
 }
 
 const DEPARTMENT_FALLBACK = [
@@ -133,6 +135,50 @@ export function RequisitionFormModal({
                 ))}
               </Select>
             </Field>
+            <Field
+              label="Backup recruiter"
+              hint="Who picks this up when the lead is away."
+              error={errors.backupRecruiterId}
+            >
+              <Select name="backupRecruiterId" defaultValue={requisition?.backupRecruiterId ?? ""}>
+                <option value="">None</option>
+                {options.recruiters
+                  .filter((u) => u.id !== requisition?.leadRecruiterId)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                    </option>
+                  ))}
+              </Select>
+            </Field>
+            <Field label="How it reached us" error={errors.source}>
+              <Select name="source" defaultValue={requisition?.source ?? "client_direct"}>
+                {REQUISITION_SOURCES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {options.scorecards?.length ? (
+              <Field
+                label="Scorecard"
+                hint="What this requirement's panels score against."
+                error={errors.scorecardTemplateId}
+              >
+                <Select
+                  name="scorecardTemplateId"
+                  defaultValue={requisition?.scorecardTemplateId ?? ""}
+                >
+                  <option value="">Default</option>
+                  {options.scorecards.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            ) : null}
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3">

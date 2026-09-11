@@ -4,10 +4,18 @@ import { CalendarX2, Clock, Users } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/layout/page-header";
 import { FilterBar } from "@/components/domain/filter-bar";
 import { InterviewDayGroups } from "@/components/domain/interview-list";
+import { ScorecardProvider } from "@/components/domain/forms/feedback-form";
+import { scorecardMap } from "@/server/queries/scorecards";
 import { KpiTile } from "@/components/domain/kpi-tile";
 import { LinkTabs } from "@/components/ui/misc";
 import { EmptyState } from "@/components/ui/empty-state";
-import { INTERVIEW_STATUSES, INTERVIEW_TYPES } from "@/lib/domain";
+import {
+  FEEDBACK_SLA_HOURS,
+  INTERVIEW_STATUSES,
+  INTERVIEW_TYPES,
+  OVERDUE_BUCKETS,
+  OVERDUE_BUCKET_LABEL,
+} from "@/lib/domain";
 import { isoDate, pluralize } from "@/lib/utils";
 import {
   awaitingFeedback,
@@ -52,11 +60,24 @@ export default async function InterviewsPage({
   const actor = await requirePermission("interview.view.own");
   const rows = await listInterviews(filters, actor);
   const groups = groupByDay(rows);
+  // Loaded once for the whole page; each card looks up its own template.
+  const scorecards = await scorecardMap();
   const focusId = get("focus");
 
   const upcoming = await listInterviews({ window: "upcoming" }, actor);
   const thisWeek = await listInterviews({ window: "week" }, actor);
   const debt = await awaitingFeedback(undefined, actor);
+  const overdue = debt.filter((r) => r.overdueBucket !== null);
+  // Bucketed the way §10 asks to report it: how late, not merely late.
+  const slaBuckets = OVERDUE_BUCKETS.map((hours) => ({
+    hours,
+    label: OVERDUE_BUCKET_LABEL[hours],
+    rows: debt.filter((r) => r.overdueBucket === hours),
+  })).concat({
+    hours: 72 as (typeof OVERDUE_BUCKETS)[number],
+    label: OVERDUE_BUCKET_LABEL["72_plus"],
+    rows: debt.filter((r) => r.overdueBucket === "72_plus"),
+  });
   const openReqs = await listRequisitions({ status: "active" }, actor);
 
   const hoursThisWeek =
@@ -103,8 +124,12 @@ export default async function InterviewsPage({
           <KpiTile
             label="Awaiting feedback"
             value={String(debt.length)}
-            hint="Completed rounds missing at least one scorecard"
-            tone={debt.length > 12 ? "rose" : "amber"}
+            hint={
+              overdue.length
+                ? `${overdue.length} past the ${FEEDBACK_SLA_HOURS}h SLA`
+                : "All inside the SLA"
+            }
+            tone={overdue.length ? "rose" : debt.length ? "amber" : "emerald"}
             href="/interviews?window=awaiting_feedback"
           />
           <KpiTile
@@ -115,6 +140,35 @@ export default async function InterviewsPage({
             href="/team"
           />
         </section>
+
+        {window === "awaiting_feedback" && debt.length ? (
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {slaBuckets.map((b) => (
+              <div key={b.label} className="card p-4">
+                <p className="text-[11px] font-semibold tracking-[0.08em] text-content-subtle uppercase">
+                  {b.label}
+                </p>
+                <p
+                  className={
+                    b.rows.length
+                      ? "mt-1 text-[22px] leading-none font-semibold text-[hsl(var(--tone-rose))] tabular-nums"
+                      : "mt-1 text-[22px] leading-none font-semibold text-content tabular-nums"
+                  }
+                >
+                  {b.rows.length}
+                </p>
+                <p className="mt-1.5 text-[11.5px] text-content-subtle">
+                  {b.rows.length
+                    ? `${pluralize(
+                        b.rows.reduce((n, r) => n + r.outstandingFeedback, 0),
+                        "scorecard",
+                      )} outstanding`
+                    : "Nothing in this band"}
+                </p>
+              </div>
+            ))}
+          </section>
+        ) : null}
 
         <FilterBar
           searchKey={null}
@@ -167,7 +221,9 @@ export default async function InterviewsPage({
               {pluralize(rows.length, "interview")} across{" "}
               {pluralize(new Set(rows.map((r) => r.requisitionId)).size, "requisition")}
             </p>
-            <InterviewDayGroups groups={groups} focusId={focusId} today={isoDate(new Date())} />
+            <ScorecardProvider value={scorecards}>
+              <InterviewDayGroups groups={groups} focusId={focusId} today={isoDate(new Date())} />
+            </ScorecardProvider>
           </>
         )}
       </PageBody>

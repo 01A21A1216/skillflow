@@ -50,6 +50,11 @@ export const PERMISSIONS = [
   { key: "feedback.submit", label: "Submit feedback", category: "Interviews", description: "Complete a scorecard for a round the user sat on." },
   { key: "feedback.view.all", label: "View all feedback", category: "Interviews", description: "Read scorecards written by other interviewers." },
 
+  /* ---- Attachments ---- */
+  { key: "attachment.view", label: "View attachments", category: "Attachments", description: "Open resumes, briefs and other files on a record." },
+  { key: "attachment.upload", label: "Upload attachments", category: "Attachments", description: "Add a file to a candidate or requirement." },
+  { key: "attachment.delete", label: "Delete attachments", category: "Attachments", description: "Remove a file. The record keeps its history." },
+
   /* ---- Offers ---- */
   { key: "offer.view", label: "View offers", category: "Offers", description: "See offer terms and status." },
   { key: "offer.create", label: "Draft offers", category: "Offers", description: "Create an offer for a candidate at offer stage." },
@@ -107,6 +112,9 @@ const RECRUITER_CORE = [
   "interview.schedule",
   "interview.cancel",
   "feedback.view.all",
+  "attachment.view",
+  "attachment.upload",
+  "attachment.delete",
   "offer.view",
   "offer.create",
   "offer.edit",
@@ -152,6 +160,8 @@ export const ROLES: readonly RoleDef[] = [
       "candidate.edit",
       "submission.create",
       "interview.view.own",
+      "attachment.view",
+      "attachment.upload",
       "team.view",
       "note.create",
     ],
@@ -173,6 +183,7 @@ export const ROLES: readonly RoleDef[] = [
       "interview.schedule",
       "feedback.submit",
       "feedback.view.all",
+      "attachment.view",
       "offer.view",
       "offer.approve",
       "client.view",
@@ -186,7 +197,7 @@ export const ROLES: readonly RoleDef[] = [
     label: "Interviewer",
     description: "Sees the interviews they are on the panel for and submits scorecards. Nothing else.",
     rank: 40,
-    permissions: ["interview.view.own", "feedback.submit", "note.create"],
+    permissions: ["interview.view.own", "feedback.submit", "attachment.view", "note.create"],
   },
   {
     key: "readonly_management",

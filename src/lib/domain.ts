@@ -336,6 +336,25 @@ export function isRateBased(type: string) {
   return RATE_BASED_EMPLOYMENT.includes(type as EmploymentType);
 }
 
+/** How a requirement reached us (§5). Distinct from a *candidate's* source. */
+export type RequisitionSource =
+  | "client_direct"
+  | "repeat_business"
+  | "rfp"
+  | "partner"
+  | "referral"
+  | "inbound";
+
+export const REQUISITION_SOURCES: Meta<RequisitionSource>[] = [
+  { value: "client_direct", label: "Client direct", tone: "indigo" },
+  { value: "repeat_business", label: "Repeat business", tone: "emerald" },
+  { value: "rfp", label: "RFP / tender", tone: "violet" },
+  { value: "partner", label: "Partner / vendor", tone: "cyan" },
+  { value: "referral", label: "Referral", tone: "blue" },
+  { value: "inbound", label: "Inbound", tone: "slate" },
+];
+export const REQUISITION_SOURCE = index(REQUISITION_SOURCES);
+
 export type WorkMode = "onsite" | "hybrid" | "remote";
 
 export const WORK_MODES: Meta<WorkMode>[] = [
@@ -373,6 +392,39 @@ export const CANDIDATE_STATUSES: Meta<CandidateStatus>[] = [
   { value: "archived", label: "Archived", tone: "neutral" },
 ];
 export const CANDIDATE_STATUS = index(CANDIDATE_STATUSES);
+
+/**
+ * How soon a candidate can start (§6).
+ *
+ * Kept separate from `noticePeriodDays`: the notice period is a fact about
+ * their current job, availability is what they will commit to, and contractors
+ * routinely have one without the other.
+ */
+export type Availability =
+  | "immediate"
+  | "two_weeks"
+  | "one_month"
+  | "two_months"
+  | "not_looking";
+
+export const AVAILABILITIES: Meta<Availability>[] = [
+  { value: "immediate", label: "Immediately", tone: "emerald" },
+  { value: "two_weeks", label: "2 weeks", tone: "cyan" },
+  { value: "one_month", label: "1 month", tone: "blue" },
+  { value: "two_months", label: "2 months +", tone: "amber" },
+  { value: "not_looking", label: "Not looking", tone: "slate" },
+];
+export const AVAILABILITY = index(AVAILABILITIES);
+
+/** What a rate is quoted against. Contract work is hourly; permanent is annual. */
+export type RateBasis = "hourly" | "daily" | "annual";
+
+export const RATE_BASES: Meta<RateBasis>[] = [
+  { value: "hourly", label: "per hour", tone: "slate" },
+  { value: "daily", label: "per day", tone: "slate" },
+  { value: "annual", label: "per year", tone: "slate" },
+];
+export const RATE_BASIS = index(RATE_BASES);
 
 export type Source =
   | "referral"
@@ -460,15 +512,25 @@ export const INTERVIEW_TYPES: Meta<InterviewType>[] = [
 ];
 export const INTERVIEW_TYPE = index(INTERVIEW_TYPES);
 
-export type InterviewStatus = "scheduled" | "completed" | "cancelled" | "no_show" | "rescheduled";
+export type InterviewStatus =
+  | "scheduled"
+  | "confirmed"
+  | "completed"
+  | "cancelled"
+  | "no_show"
+  | "rescheduled";
 
 export const INTERVIEW_STATUSES: Meta<InterviewStatus>[] = [
-  { value: "scheduled", label: "Scheduled", tone: "blue" },
+  { value: "scheduled", label: "Scheduled", tone: "blue", description: "Booked, not yet confirmed by everyone" },
+  { value: "confirmed", label: "Confirmed", tone: "indigo", description: "Candidate and panel have both accepted" },
   { value: "completed", label: "Completed", tone: "emerald" },
   { value: "rescheduled", label: "Rescheduled", tone: "amber" },
   { value: "no_show", label: "No show", tone: "orange" },
   { value: "cancelled", label: "Cancelled", tone: "rose" },
 ];
+
+/** Statuses that mean the interview is still ahead of the panel. */
+export const PENDING_INTERVIEW_STATUSES: InterviewStatus[] = ["scheduled", "confirmed"];
 export const INTERVIEW_STATUS = index(INTERVIEW_STATUSES);
 
 export type InterviewMode = "video" | "phone" | "onsite";
@@ -493,12 +555,26 @@ export const OUTCOMES: Meta<Outcome>[] = [
 ];
 export const OUTCOME = index(OUTCOMES);
 
-export type Recommendation = "strong_hire" | "hire" | "lean_hire" | "lean_no_hire" | "no_hire";
+export type Recommendation =
+  | "strong_hire"
+  | "hire"
+  | "lean_hire"
+  | "maybe"
+  | "lean_no_hire"
+  | "no_hire";
 
+/**
+ * The recommendation scale (§11), with an explicit **Maybe** midpoint.
+ *
+ * Without one, an interviewer who genuinely cannot call it has to round up or
+ * down, and the rounding is invisible afterwards. Maybe scores zero, so it
+ * moves the panel average towards undecided rather than pretending to a lean.
+ */
 export const RECOMMENDATIONS: Meta<Recommendation>[] = [
   { value: "strong_hire", label: "Strong hire", tone: "emerald" },
   { value: "hire", label: "Hire", tone: "emerald" },
   { value: "lean_hire", label: "Lean hire", tone: "cyan" },
+  { value: "maybe", label: "Maybe", tone: "slate", description: "Genuinely undecided — needs another signal" },
   { value: "lean_no_hire", label: "Lean no hire", tone: "orange" },
   { value: "no_hire", label: "No hire", tone: "rose" },
 ];
@@ -508,16 +584,72 @@ export const RECOMMENDATION_SCORE: Record<Recommendation, number> = {
   strong_hire: 2,
   hire: 1,
   lean_hire: 0.5,
+  maybe: 0,
   lean_no_hire: -1,
   no_hire: -2,
 };
 
-export const FEEDBACK_COMPETENCIES = [
-  { key: "technical", label: "Technical depth" },
-  { key: "problemSolving", label: "Problem solving" },
-  { key: "communication", label: "Communication" },
-  { key: "cultureFit", label: "Values alignment" },
+/* ------------------------------------------------------------------ *
+ * Scorecards (§11)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The default scorecard.
+ *
+ * Templates live in the database (`scorecard_templates`) so they are editable
+ * per role; this is what the seed installs and what a panel falls back to when
+ * a requirement names no template. Scores are stored as a keyed map, so adding
+ * a competency is a template edit rather than a migration.
+ */
+export const DEFAULT_COMPETENCIES = [
+  { key: "technical", label: "Technical depth", description: "Command of the craft this role needs" },
+  { key: "problem_solving", label: "Problem solving", description: "How they break down something unfamiliar" },
+  { key: "communication", label: "Communication", description: "Clarity, listening, and writing" },
+  { key: "ownership", label: "Ownership", description: "What they take responsibility for without being asked" },
+  { key: "collaboration", label: "Collaboration", description: "How they work with people who disagree" },
+  { key: "culture_fit", label: "Values alignment", description: "Fit with how this team actually operates" },
 ] as const;
+
+/** Kept for the few places that still want a flat list of the default keys. */
+export const FEEDBACK_COMPETENCIES = DEFAULT_COMPETENCIES;
+
+/* ------------------------------------------------------------------ *
+ * Feedback SLA (§10)
+ * ------------------------------------------------------------------ */
+
+export type FeedbackStatus = "pending" | "submitted" | "declined";
+
+export const FEEDBACK_STATUSES: Meta<FeedbackStatus>[] = [
+  { value: "pending", label: "Pending", tone: "amber" },
+  { value: "submitted", label: "Submitted", tone: "emerald" },
+  { value: "declined", label: "Declined", tone: "slate", description: "Did not attend, or stood down" },
+];
+export const FEEDBACK_STATUS = index(FEEDBACK_STATUSES);
+
+/** Hours after an interview ends before its scorecard is considered late. */
+export const FEEDBACK_SLA_HOURS = 24;
+
+/**
+ * How overdue a scorecard is, in the buckets the spec asks to report on.
+ * `null` means it is not late yet.
+ */
+export const OVERDUE_BUCKETS = [24, 48, 72] as const;
+export type OverdueBucket = (typeof OVERDUE_BUCKETS)[number] | "72_plus";
+
+export function overdueBucket(hoursLate: number): OverdueBucket | null {
+  if (hoursLate <= 0) return null;
+  if (hoursLate <= 24) return 24;
+  if (hoursLate <= 48) return 48;
+  if (hoursLate <= 72) return 72;
+  return "72_plus";
+}
+
+export const OVERDUE_BUCKET_LABEL: Record<OverdueBucket, string> = {
+  24: "Up to 24h late",
+  48: "24–48h late",
+  72: "48–72h late",
+  "72_plus": "Over 72h late",
+};
 
 /* ------------------------------------------------------------------ *
  * Offers
@@ -610,6 +742,8 @@ export const ACTIVITY_TYPES = {
   offer_created: { label: "Offer drafted", tone: "amber" as Tone },
   offer_status: { label: "Offer status changed", tone: "amber" as Tone },
   note_added: { label: "Note added", tone: "slate" as Tone },
+  attachment_added: { label: "File attached", tone: "cyan" as Tone },
+  attachment_removed: { label: "File removed", tone: "slate" as Tone },
 } as const;
 
 export type ActivityType = keyof typeof ACTIVITY_TYPES;

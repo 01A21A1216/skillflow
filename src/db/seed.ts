@@ -26,6 +26,9 @@ import {
   AGENDA_TEMPLATES,
   CANDIDATE_COMPANIES,
   CITIES,
+  DEGREES,
+  EXPERIENCE_BLURBS,
+  FIELDS_OF_STUDY,
   CLIENT_SEEDS,
   CONCERN_TEMPLATES,
   FIRST_NAMES,
@@ -34,8 +37,15 @@ import {
   NOTE_TEMPLATES,
   STRENGTH_TEMPLATES,
   TEAM_SEEDS,
+  UNIVERSITIES,
 } from "./seed-data";
-import { STAGE_ORDER, isRateBased, type Stage } from "../lib/domain";
+import {
+  DEFAULT_COMPETENCIES,
+  FEEDBACK_SLA_HOURS,
+  STAGE_ORDER,
+  isRateBased,
+  type Stage,
+} from "../lib/domain";
 
 /* ------------------------------------------------------------------ *
  * Deterministic RNG
@@ -118,6 +128,8 @@ const panels: (typeof s.interviewPanel.$inferInsert)[] = [];
 const feedbacks: (typeof s.feedback.$inferInsert)[] = [];
 const offers: (typeof s.offers.$inferInsert)[] = [];
 const notes: (typeof s.notes.$inferInsert)[] = [];
+const educationRows: (typeof s.candidateEducation.$inferInsert)[] = [];
+const experienceRows: (typeof s.candidateExperience.$inferInsert)[] = [];
 const activities: (typeof s.activities.$inferInsert)[] = [];
 
 function activity(
@@ -226,6 +238,96 @@ const hiringManagers = byRole("hiring_manager");
 /** Coordinators share the recruiter role; identify them by job title. */
 const coordinators = users.filter((u) => u.title!.includes("Coordinator"));
 const interviewerPool = [...byRole("interviewer"), ...hiringManagers];
+
+/* ------------------------------------------------------------------ *
+ * 3a. Scorecard templates
+ *
+ * Three templates rather than one, because "Values alignment" means something
+ * different to an engineering panel and a sales panel, and the spec asks for
+ * per-role scorecards (§11). The general one is the default a requirement
+ * falls back to.
+ * ------------------------------------------------------------------ */
+
+const scorecardTemplateRows: (typeof s.scorecardTemplates.$inferInsert)[] = [];
+const scorecardCriterionRows: (typeof s.scorecardCriteria.$inferInsert)[] = [];
+
+interface SeedScorecard {
+  id: string;
+  criteria: { key: string; label: string; description: string }[];
+}
+
+function defineScorecard(
+  name: string,
+  description: string,
+  criteria: readonly { key: string; label: string; description: string }[],
+  isDefault = false,
+): SeedScorecard {
+  const templateId = id("scd");
+  scorecardTemplateRows.push({
+    id: templateId,
+    name,
+    description,
+    isDefault,
+    active: true,
+    createdAt: new Date(NOW - 300 * DAY),
+    updatedAt: new Date(NOW - 300 * DAY),
+  });
+  criteria.forEach((c, position) => {
+    scorecardCriterionRows.push({
+      id: id("scc"),
+      templateId,
+      key: c.key,
+      label: c.label,
+      description: c.description,
+      position,
+      createdAt: new Date(NOW - 300 * DAY),
+    });
+  });
+  return { id: templateId, criteria: criteria.map((c) => ({ ...c })) };
+}
+
+const GENERAL_SCORECARD = defineScorecard(
+  "General",
+  "The default six competencies, used where no role-specific card applies.",
+  DEFAULT_COMPETENCIES,
+  true,
+);
+
+const ENGINEERING_SCORECARD = defineScorecard(
+  "Engineering",
+  "For technical panels: depth, design, and how someone operates what they build.",
+  [
+    { key: "technical", label: "Technical depth", description: "Command of the stack this role runs on" },
+    { key: "system_design", label: "System design", description: "Structuring something bigger than one service" },
+    { key: "problem_solving", label: "Problem solving", description: "Breaking down something unfamiliar" },
+    { key: "code_quality", label: "Code and craft", description: "Readability, testing, and what they leave behind" },
+    { key: "operational", label: "Operational ownership", description: "What happens when it breaks at 3am" },
+    { key: "collaboration", label: "Collaboration", description: "Working with people who disagree" },
+  ],
+);
+
+const GTM_SCORECARD = defineScorecard(
+  "Go-to-market",
+  "For commercial panels: discovery, objection handling, and how they run a deal.",
+  [
+    { key: "discovery", label: "Discovery", description: "Getting to the real problem, not the stated one" },
+    { key: "domain", label: "Domain knowledge", description: "Credibility with a technical buyer" },
+    { key: "objection", label: "Objection handling", description: "Staying useful under pressure" },
+    { key: "process", label: "Deal process", description: "Forecast discipline and next-step hygiene" },
+    { key: "communication", label: "Communication", description: "Clarity in writing and in the room" },
+    { key: "collaboration", label: "Collaboration", description: "Working with delivery and support" },
+  ],
+);
+
+/** Which card a department's panels fill in. */
+function scorecardFor(department: string): SeedScorecard {
+  if (["Engineering", "Security", "Data & Analytics", "Quality"].includes(department)) {
+    return ENGINEERING_SCORECARD;
+  }
+  if (department === "Go-to-Market") return GTM_SCORECARD;
+  return GENERAL_SCORECARD;
+}
+
 const leadership = [...byRole("super_admin"), ...byRole("recruitment_manager")];
 
 /* ------------------------------------------------------------------ *
@@ -345,6 +447,20 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
     clientId: client.id!,
     hiringManagerId: hm.id!,
     leadRecruiterId: lead.id!,
+    // Most requirements name cover; the ones that do not are exactly the ones
+    // that stall when their recruiter is away, which is worth being able to see.
+    backupRecruiterId: chance(0.62)
+      ? (sample(recruiters.filter((r) => r.id !== lead.id), 1)[0]?.id ?? null)
+      : null,
+    source: weighted([
+      ["repeat_business", 34],
+      ["client_direct", 29],
+      ["partner", 13],
+      ["rfp", 11],
+      ["referral", 8],
+      ["inbound", 5],
+    ] as [string, number][]),
+    scorecardTemplateId: scorecardFor(family.department).id,
     department: family.department,
     employmentType,
     workMode,
@@ -432,6 +548,22 @@ function visaPolicy(employmentType: string): string[] {
  * 4. Candidate factory
  * ------------------------------------------------------------------ */
 
+/** The middle of each availability band, for a plausible start date. */
+function noticeToDays(availability: string) {
+  switch (availability) {
+    case "immediate":
+      return 0;
+    case "two_weeks":
+      return 14;
+    case "one_month":
+      return 30;
+    case "two_months":
+      return 60;
+    default:
+      return 90;
+  }
+}
+
 const usedHandles = new Set<string>();
 
 function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number) {
@@ -471,6 +603,21 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
   const company = pick(CANDIDATE_COMPANIES);
   const notice = pick([0, 14, 14, 21, 30, 30, 60]);
   const relocate = chance(0.32);
+  const contractor = chance(0.38);
+  const availability = contractor
+    ? weighted([
+        ["immediate", 44],
+        ["two_weeks", 33],
+        ["one_month", 18],
+        ["two_months", 5],
+      ] as [string, number][])
+    : weighted([
+        ["one_month", 38],
+        ["two_weeks", 26],
+        ["two_months", 18],
+        ["immediate", 11],
+        ["not_looking", 7],
+      ] as [string, number][]);
 
   const row = {
     id: id("cnd"),
@@ -484,6 +631,9 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
     yearsExperience: years,
     seniority: titleSpec.seniority,
     skills,
+    // The one technology they lead with. Taken from the skills they have rather
+    // than invented, so search on it actually finds the right people.
+    primaryTechnology: skills[0] ?? "",
     source,
     sourceDetail:
       source === "referral"
@@ -502,6 +652,12 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
     currentSalary: Math.round((titleSpec.base[0] * (0.82 + rand() * 0.22)) / 1000) * 1000,
     currency: "USD",
     noticePeriodDays: notice,
+    availability,
+    availableFrom: availability === "immediate" ? isoDay(NOW) : isoDay(NOW + noticeToDays(availability) * DAY),
+    // Contractors quote a rate; permanent candidates quote a salary. Both are
+    // stored because a staffing desk works both at once.
+    expectedRate: contractor ? int(58, 165) : null,
+    rateBasis: "hourly",
     workAuthorization: weighted([
       ["citizen", 46],
       ["green_card", 17],
@@ -534,6 +690,67 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
   };
 
   candidates.push(row);
+
+  /* --- Education ------------------------------------------------- */
+  const gradYear = new Date(NOW).getUTCFullYear() - years - int(0, 2);
+  const degree = weighted(DEGREES.map((d) => [d.qualification, d.weight] as [string, number]));
+  educationRows.push({
+    id: id("edu"),
+    candidateId: row.id,
+    institution: pick(UNIVERSITIES),
+    qualification: degree,
+    field: pick(FIELDS_OF_STUDY),
+    startYear: gradYear - (degree.startsWith("M") ? 2 : 4),
+    endYear: gradYear,
+    grade: chance(0.45) ? pick(["First class", "2:1", "3.8 GPA", "3.5 GPA", "Distinction"]) : null,
+    createdAt: new Date(createdMs),
+  });
+  // A postgraduate degree on top, for the minority who have one.
+  if (!degree.startsWith("M") && chance(0.22)) {
+    educationRows.push({
+      id: id("edu"),
+      candidateId: row.id,
+      institution: pick(UNIVERSITIES),
+      qualification: pick(["MSc", "MBA"]),
+      field: pick(FIELDS_OF_STUDY),
+      startYear: gradYear + 1,
+      endYear: gradYear + 3,
+      grade: null,
+      createdAt: new Date(createdMs),
+    });
+  }
+
+  /* --- Work history ---------------------------------------------- */
+  // Walked backwards from the current role so the dates never overlap and the
+  // spans add up to roughly the years of experience on the profile.
+  const roleCount = clampNum(Math.round(years / 3) + int(0, 1), 1, 4);
+  let cursorYear = new Date(NOW).getUTCFullYear();
+  let cursorMonth = new Date(NOW).getUTCMonth() + 1;
+  for (let r = 0; r < roleCount; r += 1) {
+    const months = int(14, 48);
+    let startMonth = cursorMonth - months;
+    let startYear = cursorYear;
+    while (startMonth <= 0) {
+      startMonth += 12;
+      startYear -= 1;
+    }
+    const iso = (y: number, m: number) => `${y}-${String(m).padStart(2, "0")}`;
+    experienceRows.push({
+      id: id("exp"),
+      candidateId: row.id,
+      company: r === 0 ? company : pick(CANDIDATE_COMPANIES),
+      title: r === 0 ? titleSpec.title : pick(family.titles).title,
+      location: row.location,
+      startedOn: iso(startYear, startMonth),
+      endedOn: r === 0 ? null : iso(cursorYear, cursorMonth),
+      summary: pick(EXPERIENCE_BLURBS),
+      skills: sample(skills, int(2, Math.min(4, skills.length))),
+      createdAt: new Date(createdMs),
+    });
+    cursorYear = startYear;
+    cursorMonth = startMonth;
+  }
+
   activity(
     "candidate",
     row.id,
@@ -840,8 +1057,13 @@ function buildSubmission(
     const spec = loop[Math.min(roundNumber - 1, loop.length - 1)]!;
     const inFuture = scheduledAt > NOW;
 
+    // A round booked well ahead has usually been confirmed by everyone; one
+    // booked for tomorrow often has not been chased yet.
     const ivStatus = inFuture
-      ? "scheduled"
+      ? weighted([
+          ["confirmed", 64],
+          ["scheduled", 36],
+        ] as [string, number][])
       : weighted([
           ["completed", 88],
           ["cancelled", 4],
@@ -877,6 +1099,10 @@ function buildSubmission(
     const panelSize = spec.type === "panel" ? int(3, 4) : spec.type === "phone_screen" ? 1 : int(1, 2);
     const panelists = sample(sameDept.length >= panelSize ? sameDept : interviewerPool, panelSize);
 
+    const durationMinutes =
+      spec.type === "panel" ? 180 : spec.type === "phone_screen" ? 30 : pick([45, 60, 60, 75]);
+    const endsAt = scheduledAt + durationMinutes * 60_000;
+
     interviews.push({
       id: interviewId,
       submissionId,
@@ -885,7 +1111,10 @@ function buildSubmission(
       type: spec.type,
       mode,
       scheduledAt: new Date(scheduledAt),
-      durationMinutes: spec.type === "panel" ? 180 : spec.type === "phone_screen" ? 30 : pick([45, 60, 60, 75]),
+      endsAt: new Date(endsAt),
+      // Booked in the organiser's zone, which is what a panel actually reads.
+      timezone: organizer.timezone ?? "America/New_York",
+      durationMinutes,
       locationOrLink:
         mode === "onsite"
           ? `${req.location} — Floor ${int(2, 14)}, ${pick(["Aspen", "Birch", "Cedar", "Dogwood", "Elm"])} Room`
@@ -895,18 +1124,31 @@ function buildSubmission(
       status: ivStatus,
       outcome,
       organizerId: organizer.id!,
+      feedbackDueAt:
+        ivStatus === "completed" ? new Date(endsAt + FEEDBACK_SLA_HOURS * 3_600_000) : null,
       agenda: pick(AGENDA_TEMPLATES),
       createdAt: new Date(Math.min(NOW, scheduledAt - int(2, 9) * DAY)),
       updatedAt: new Date(Math.min(NOW, scheduledAt)),
     });
 
+    const panelSeats = new Map<string, (typeof panels)[number]>();
     for (const [idx, p] of panelists.entries()) {
-      panels.push({
+      const seat = {
         id: id("pnl"),
         interviewId,
         userId: p.id!,
         role: idx > 0 && chance(0.15) ? "shadow" : "interviewer",
-      });
+        // Nobody owes a scorecard for a round that has not happened, or for one
+        // that was cancelled. Set as each scorecard is (or is not) written.
+        feedbackStatus:
+          ivStatus === "completed"
+            ? "pending"
+            : ivStatus === "scheduled" || ivStatus === "confirmed"
+              ? "pending"
+              : "declined",
+      };
+      panels.push(seat);
+      panelSeats.set(p.id!, seat);
     }
 
     activity(
@@ -931,15 +1173,19 @@ function buildSubmission(
         const overall = lean ? int(3, 5) : int(1, 3);
         const jitter = () => clampNum(overall + int(-1, 1), 1, 5);
         const submittedMs = Math.min(NOW, businessMoment(scheduledAt + int(0, 3) * DAY, 9, 19));
-        const recommendation = lean
-          ? outcome === "strong_yes"
-            ? "strong_hire"
-            : outcome === "yes"
-              ? "hire"
-              : "lean_hire"
-          : outcome === "lean_no"
-            ? "lean_no_hire"
-            : "no_hire";
+        // A genuinely undecided interviewer is a real and useful signal, so
+        // Maybe occurs rather than being rounded into a lean.
+        const recommendation = chance(0.06)
+          ? "maybe"
+          : lean
+            ? outcome === "strong_yes"
+              ? "strong_hire"
+              : outcome === "yes"
+                ? "hire"
+                : "lean_hire"
+            : outcome === "lean_no"
+              ? "lean_no_hire"
+              : "no_hire";
 
         feedbacks.push({
           id: id("fbk"),
@@ -947,10 +1193,10 @@ function buildSubmission(
           interviewerId: p.id!,
           recommendation,
           overall,
-          technical: jitter(),
-          communication: jitter(),
-          problemSolving: jitter(),
-          cultureFit: jitter(),
+          templateId: scorecardFor(req.department).id,
+          scores: Object.fromEntries(
+            scorecardFor(req.department).criteria.map((c) => [c.key, jitter()]),
+          ),
           strengths: pick(STRENGTH_TEMPLATES),
           concerns: lean && chance(0.4) ? "" : pick(CONCERN_TEMPLATES),
           notes: `Round ${roundNumber} (${spec.title}). ${
@@ -961,6 +1207,9 @@ function buildSubmission(
           submittedAt: new Date(submittedMs),
           createdAt: new Date(submittedMs),
         });
+
+        const seat = panelSeats.get(p.id!);
+        if (seat) seat.feedbackStatus = "submitted";
 
         activity(
           "submission",
@@ -1274,10 +1523,14 @@ async function main() {
   await insertAll(s.permissions as never, permissionRows, "permissions");
   await insertAll(s.rolePermissions as never, rolePermissionRows, "role permissions");
   await insertAll(s.users as never, users, "users");
+  await insertAll(s.scorecardTemplates as never, scorecardTemplateRows, "scorecards");
+  await insertAll(s.scorecardCriteria as never, scorecardCriterionRows, "scorecard criteria");
   await insertAll(s.clients as never, clients, "clients");
   await insertAll(s.requisitions as never, requisitions, "requisitions");
   await insertAll(s.requisitionAssignees as never, reqAssignees, "req assignees");
   await insertAll(s.candidates as never, candidates, "candidates");
+  await insertAll(s.candidateEducation as never, educationRows, "education");
+  await insertAll(s.candidateExperience as never, experienceRows, "experience");
   await insertAll(s.submissions as never, submissions, "submissions");
   await insertAll(s.stageEvents as never, stageEvents, "stage events");
   await insertAll(s.interviews as never, interviews, "interviews");

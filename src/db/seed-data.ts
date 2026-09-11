@@ -29,6 +29,41 @@ export const LAST_NAMES = [
   "Quintero", "Bekele", "Fontaine", "Grimaldi", "Hoffmann", "Ivanov", "Jorgensen", "Kapoor",
 ];
 
+export const UNIVERSITIES = [
+  "University of Texas at Austin", "Georgia Institute of Technology", "Purdue University",
+  "University of Illinois Urbana-Champaign", "North Carolina State University",
+  "Arizona State University", "University of Washington", "Rutgers University",
+  "Anna University", "BITS Pilani", "University of Waterloo", "Trinity College Dublin",
+  "Technical University of Munich", "Universidad Politecnica de Madrid", "University of Toronto",
+  "Delft University of Technology", "University of Manchester", "Politecnico di Milano",
+] as const;
+
+export const DEGREES = [
+  { qualification: "BSc", weight: 42 },
+  { qualification: "BEng", weight: 18 },
+  { qualification: "MSc", weight: 24 },
+  { qualification: "MEng", weight: 6 },
+  { qualification: "MBA", weight: 6 },
+  { qualification: "BA", weight: 4 },
+] as const;
+
+export const FIELDS_OF_STUDY = [
+  "Computer Science", "Software Engineering", "Information Systems", "Electrical Engineering",
+  "Mathematics", "Data Science", "Physics", "Business Administration", "Cybersecurity",
+  "Human-Computer Interaction", "Statistics", "Finance",
+] as const;
+
+export const EXPERIENCE_BLURBS = [
+  "Owned the service end to end, from schema design through on-call rotation.",
+  "Led a three-person squad through a platform migration with no customer-facing downtime.",
+  "Rebuilt the reporting layer, taking a nightly batch down to minutes.",
+  "Introduced the testing strategy the team still uses; flaky-test rate fell by two thirds.",
+  "First engineer on the product; grew it from prototype to the company's largest revenue line.",
+  "Ran the integration surface for enterprise customers, including the compliance work.",
+  "Took over a system nobody wanted to touch and made it boring again.",
+  "Partnered with design and support to close the loop on the ten worst reported issues.",
+] as const;
+
 export const CANDIDATE_COMPANIES = [
   "Northwind Logistics", "Helix Bio", "Aperture Labs", "Vertex Payments", "Brightline Health",
   "Corvus Systems", "Lumen Analytics", "Kestrel Robotics", "Solaris Grid", "Meridian Bank",
