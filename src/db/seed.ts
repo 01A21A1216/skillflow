@@ -995,7 +995,11 @@ function buildSubmission(
   if (kind === "live") {
     // Work backwards from today so stage age and SLA breaches are realistic.
     const [ageLo, ageHi] = LIVE_AGE[stageName];
-    let cursor = businessMoment(daysAgo(int(ageLo, ageHi)));
+    // Every desk has a tail: a handful of people who went quiet and nobody
+    // noticed. Without them the "candidate has gone quiet" trigger has nothing
+    // to fire on, and the aging chips only ever show the healthy end.
+    const age = chance(0.09) ? int(16, 48) : int(ageLo, ageHi);
+    let cursor = businessMoment(daysAgo(age));
     enteredAt[furthest] = cursor;
     for (let st = furthest - 1; st >= 0; st -= 1) {
       const [lo, hi] = DWELL[STAGES[st]!];

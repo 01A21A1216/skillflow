@@ -8,6 +8,7 @@ import { candidates, offers, requisitions, stageEvents, submissions } from "@/db
 import type { User } from "@/db/schema";
 import { OFFER_STATUS, type OfferStatus } from "@/lib/domain";
 import { offerTransitionError, requisitionFill } from "@/server/rules";
+import { notify } from "@/server/notify";
 import { offerSchema, offerTransitionSchema } from "@/lib/validation";
 import { can, canTouchRequisition } from "@/server/authz";
 import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
@@ -122,6 +123,21 @@ async function createOfferImpl(actor: User, formData: FormData): Promise<ActionS
     actorId: actor.id,
     summary: `Offer drafted for ${ctx.candidate.firstName} ${ctx.candidate.lastName} — ${ctx.requisition.title}`,
     meta: { requisitionId: ctx.requisition.id, candidateId: ctx.candidate.id, offerId: id },
+  });
+
+  // An offer needs approving by someone other than whoever drafted it, so
+  // this is the notification that actually unblocks work rather than merely
+  // reporting it.
+  await notify({
+    userIds: [ctx.requisition.hiringManagerId, ctx.requisition.leadRecruiterId],
+    type: "offer_created",
+    title: `Offer drafted for ${ctx.candidate.firstName} ${ctx.candidate.lastName}`,
+    body: `${ctx.requisition.code} · ${ctx.requisition.title}`,
+    href: `/offers?focus=${id}`,
+    actorId: actor.id,
+    entityType: "offer",
+    entityId: id,
+    dedupeKey: `offer_created:${id}`,
   });
 
   revalidateAll(ctx.requisition.id, ctx.candidate.id);

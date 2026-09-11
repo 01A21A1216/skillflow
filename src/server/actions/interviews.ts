@@ -23,6 +23,7 @@ import {
   type InterviewType,
 } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
+import { notify } from "@/server/notify";
 import { nextInterviewStage, settleOutcome } from "@/server/rules";
 import {
   declineFeedbackSchema,
@@ -215,6 +216,18 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
     },
   });
 
+  await notify({
+    userIds: [...panelPeople.map((p) => p.id), input.organizerId, ctx.submission.ownerId],
+    type: "interview_scheduled",
+    title: `${input.title} — ${ctx.candidate.firstName} ${ctx.candidate.lastName}`,
+    body: `${ctx.requisition.code} · ${when.toLocaleString()} (${input.timezone})`,
+    href: `/interviews?focus=${id}`,
+    actorId: actor.id,
+    entityType: "interview",
+    entityId: id,
+    dedupeKey: `interview_scheduled:${id}`,
+  });
+
   revalidatePath("/interviews");
   revalidatePath("/pipeline");
   revalidatePath("/");
@@ -277,6 +290,49 @@ async function updateInterviewOutcomeImpl(actor: User, formData: FormData): Prom
   });
 
   await syncInterviewStage(interview.submissionId, actor.id);
+
+  if (status === "completed") {
+    const owed = (await db
+      .select({ userId: interviewPanel.userId })
+      .from(interviewPanel)
+      .where(
+        and(
+          eq(interviewPanel.interviewId, interviewId),
+          eq(interviewPanel.feedbackStatus, "pending"),
+        ),
+      )
+      ).map((r) => r.userId);
+
+    await notify({
+      userIds: owed,
+      type: "feedback_pending",
+      title: `Scorecard needed for ${ctx.candidate.firstName} ${ctx.candidate.lastName}`,
+      body: `${interview.title} · ${ctx.requisition.code}. Due within ${FEEDBACK_SLA_HOURS} hours.`,
+      href: `/interviews?window=awaiting_feedback&focus=${interviewId}`,
+      actorId: actor.id,
+      entityType: "interview",
+      entityId: interviewId,
+      dedupeKey: `feedback_pending:${interviewId}`,
+    });
+  } else if (["cancelled", "rescheduled", "no_show"].includes(status)) {
+    const panel = (await db
+      .select({ userId: interviewPanel.userId })
+      .from(interviewPanel)
+      .where(eq(interviewPanel.interviewId, interviewId))
+      ).map((r) => r.userId);
+
+    await notify({
+      userIds: [...panel, interview.organizerId, ctx.submission.ownerId],
+      type: "interview_changed",
+      title: `${interview.title} marked ${status.replace("_", " ")}`,
+      body: `${ctx.candidate.firstName} ${ctx.candidate.lastName} · ${ctx.requisition.code}`,
+      href: `/interviews?focus=${interviewId}`,
+      actorId: actor.id,
+      entityType: "interview",
+      entityId: interviewId,
+      dedupeKey: `interview_changed:${interviewId}:${status}`,
+    });
+  }
 
   revalidatePath("/interviews");
   revalidatePath("/");

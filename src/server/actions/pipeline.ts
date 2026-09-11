@@ -9,6 +9,7 @@ import type { User } from "@/db/schema";
 import { isTerminal, type Pipeline, type Stage } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
 import { backfillPath, requisitionFill } from "@/server/rules";
+import { notify } from "@/server/notify";
 import {
   addToPipelineSchema,
   holdSchema,
@@ -187,6 +188,18 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
     meta: { requisitionId: req.id, candidateId: candidate.id },
   });
 
+  await notify({
+    userIds: [req.leadRecruiterId, req.backupRecruiterId ?? "", req.hiringManagerId],
+    type: "candidate_assigned",
+    title: `${candidate.firstName} ${candidate.lastName} added to ${req.code}`,
+    body: `${req.title} · ${pipeline.label(stage)}`,
+    href: `/candidates/${candidate.id}`,
+    actorId: actor.id,
+    entityType: "submission",
+    entityId: id,
+    dedupeKey: `candidate_assigned:${id}`,
+  });
+
   revalidateEverywhere(req.id, candidate.id);
   return succeed(`Added to ${req.code}`, id);
 }
@@ -269,6 +282,28 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
     changes: [{ field: "stage", label: "Stage", from: submission.stage, to: target }],
     meta: { requisitionId: requisition.id, candidateId: candidate.id, from: submission.stage, to: target },
   });
+
+  const kind = pipeline.kind(target);
+  if (kind === "submitted" || kind === "offer" || kind === "placement") {
+    await notify({
+      userIds: [requisition.leadRecruiterId, requisition.backupRecruiterId ?? "", requisition.hiringManagerId],
+      type:
+        kind === "submitted"
+          ? "candidate_submitted"
+          : kind === "offer"
+            ? "candidate_selected"
+            : "candidate_selected",
+      title: `${candidate.firstName} ${candidate.lastName} → ${pipeline.label(target)}`,
+      body: `${requisition.code} · ${requisition.title}`,
+      href: `/candidates/${candidate.id}`,
+      actorId: actor.id,
+      entityType: "submission",
+      entityId: submissionId,
+      // Keyed by the stage, not the move: shuffling back and forth between two
+      // stages should not produce a notification each time.
+      dedupeKey: `stage:${submissionId}:${target}`,
+    });
+  }
 
   revalidateEverywhere(requisition.id, candidate.id);
   return succeed(

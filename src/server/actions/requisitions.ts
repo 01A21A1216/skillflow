@@ -9,6 +9,7 @@ import type { User } from "@/db/schema";
 import { REQ_STATUS, type ReqStatus } from "@/lib/domain";
 import { requisitionSchema, requisitionStatusSchema } from "@/lib/validation";
 import { canTouchRequisition } from "@/server/authz";
+import { notify } from "@/server/notify";
 import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
 import {
   denied,
@@ -96,6 +97,18 @@ async function createRequisitionImpl(actor: User, formData: FormData): Promise<A
     type: "requisition_created",
     actorId: actor.id,
     summary: `Opened ${code} — ${input.title} for ${client.name}`,
+  });
+
+  await notify({
+    userIds: [input.leadRecruiterId, input.backupRecruiterId ?? "", input.hiringManagerId],
+    type: "requirement_assigned",
+    title: `${code} — ${input.title}`,
+    body: `${client.name} · ${input.openings} ${input.openings === 1 ? "seat" : "seats"} · ${input.location}`,
+    href: `/requisitions/${id}`,
+    actorId: actor.id,
+    entityType: "requisition",
+    entityId: id,
+    dedupeKey: `requirement_assigned:${id}`,
   });
 
   revalidatePath("/requisitions");

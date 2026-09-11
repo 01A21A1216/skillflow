@@ -3,6 +3,8 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+
+import { NotificationBell, type InboxItem } from "./notification-bell";
 import {
   BarChart3,
   Briefcase,
@@ -89,11 +91,15 @@ export function AppShell({
   actor,
   permissions,
   counts,
+  notifications,
+  unread,
 }: {
   children: ReactNode;
   actor: User;
   permissions: string[];
   counts: NavCounts;
+  notifications: InboxItem[];
+  unread: number;
 }) {
   const granted = new Set(permissions);
   const allowed = (item: { anyOf?: string[] }) =>
@@ -261,6 +267,7 @@ export function AppShell({
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5">
+            <NotificationBell items={notifications} unread={unread} />
             <ThemeToggle />
             <UserMenu actor={actor} />
           </div>

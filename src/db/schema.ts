@@ -372,6 +372,44 @@ export const candidateExperience = pgTable(
 );
 
 /**
+ * In-app notifications (§14).
+ *
+ * One row per person per event, which is deliberate: a notification is a
+ * *delivery*, and read state belongs to the reader rather than to the event.
+ * Fanning out at write time also means the inbox query is a single indexed
+ * read rather than a re-evaluation of who should have been told.
+ *
+ * `dedupeKey` is what stops the same fact arriving five times — an SLA sweep
+ * that runs hourly must not produce an hourly reminder.
+ */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: pk(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull().default(""),
+    href: text("href"),
+    /** Who or what caused it. Null for a system sweep. */
+    actorId: text("actor_id").references(() => users.id),
+    entityType: text("entity_type"),
+    entityId: text("entity_id"),
+    /** Stable per (person, fact): a repeat delivery is refused, not duplicated. */
+    dedupeKey: text("dedupe_key").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("notification_dedupe_idx").on(t.userId, t.dedupeKey),
+    index("notification_inbox_idx").on(t.userId, t.readAt),
+    index("notification_created_idx").on(t.createdAt),
+  ],
+);
+
+/**
  * Contact history with a candidate (§7).
  *
  * Logged by hand rather than synced: this application does not own anyone's

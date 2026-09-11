@@ -193,6 +193,21 @@ CREATE TABLE "notes" (
 	"row_version" integer DEFAULT 1 NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "notifications" (
+	"id" text PRIMARY KEY NOT NULL,
+	"user_id" text NOT NULL,
+	"type" text NOT NULL,
+	"title" text NOT NULL,
+	"body" text DEFAULT '' NOT NULL,
+	"href" text,
+	"actor_id" text,
+	"entity_type" text,
+	"entity_id" text,
+	"dedupe_key" text NOT NULL,
+	"read_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "offers" (
 	"id" text PRIMARY KEY NOT NULL,
 	"submission_id" text NOT NULL,
@@ -422,6 +437,8 @@ ALTER TABLE "interview_panel" ADD CONSTRAINT "interview_panel_user_id_users_id_f
 ALTER TABLE "interviews" ADD CONSTRAINT "interviews_submission_id_submissions_id_fk" FOREIGN KEY ("submission_id") REFERENCES "public"."submissions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "interviews" ADD CONSTRAINT "interviews_organizer_id_users_id_fk" FOREIGN KEY ("organizer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "notes" ADD CONSTRAINT "notes_author_id_users_id_fk" FOREIGN KEY ("author_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_actor_id_users_id_fk" FOREIGN KEY ("actor_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "offers" ADD CONSTRAINT "offers_submission_id_submissions_id_fk" FOREIGN KEY ("submission_id") REFERENCES "public"."submissions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "offers" ADD CONSTRAINT "offers_approved_by_id_users_id_fk" FOREIGN KEY ("approved_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "offers" ADD CONSTRAINT "offers_created_by_id_users_id_fk" FOREIGN KEY ("created_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -464,6 +481,9 @@ CREATE INDEX "iv_status_idx" ON "interviews" USING btree ("status");--> statemen
 CREATE INDEX "iv_deleted_idx" ON "interviews" USING btree ("deleted_at");--> statement-breakpoint
 CREATE INDEX "note_entity_idx" ON "notes" USING btree ("entity_type","entity_id");--> statement-breakpoint
 CREATE INDEX "note_deleted_idx" ON "notes" USING btree ("deleted_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "notification_dedupe_idx" ON "notifications" USING btree ("user_id","dedupe_key");--> statement-breakpoint
+CREATE INDEX "notification_inbox_idx" ON "notifications" USING btree ("user_id","read_at");--> statement-breakpoint
+CREATE INDEX "notification_created_idx" ON "notifications" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "offer_sub_idx" ON "offers" USING btree ("submission_id");--> statement-breakpoint
 CREATE INDEX "offer_status_idx" ON "offers" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "offer_deleted_idx" ON "offers" USING btree ("deleted_at");--> statement-breakpoint
