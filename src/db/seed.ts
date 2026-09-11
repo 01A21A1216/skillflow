@@ -1575,6 +1575,38 @@ for (const plan of reqPlans) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 5c. Duplicates
+ *
+ * A real candidate database has them: the same person re-entered from a job
+ * board under a personal address weeks after a recruiter added them from a
+ * CV. Without a few, the duplicate detection and merge flow have nothing to
+ * demonstrate — and nothing proving they do not fire on everybody.
+ * ------------------------------------------------------------------ */
+
+for (const original of sample(candidates.filter((c) => c.phone), 7)) {
+  const createdMs = new Date(original.createdAt as Date).getTime() + int(5, 60) * DAY;
+  if (createdMs > NOW) continue;
+
+  const handle = `${original.firstName}.${original.lastName}${int(10, 99)}`.toLowerCase();
+  candidates.push({
+    ...original,
+    id: id("cnd"),
+    // Different mailbox, same person: the pattern the matcher has to catch
+    // without also catching two people who merely share a surname.
+    email: `${handle}@${pick(["gmail.com", "yahoo.com", "hotmail.com"])}`,
+    source: pick(["job_board", "inbound", "career_site"]),
+    sourceDetail: "Applied directly — possible duplicate of an existing record",
+    status: "new",
+    rating: 0,
+    summary: `${original.currentTitle} at ${original.currentCompany}. Applied through the careers site.`,
+    tags: [],
+    createdAt: new Date(createdMs),
+    updatedAt: new Date(createdMs),
+    lastContactedAt: null,
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * 6. Write everything
  * ------------------------------------------------------------------ */
 

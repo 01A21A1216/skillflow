@@ -839,6 +839,7 @@ export const ACTIVITY_TYPES = {
   requisition_status: { label: "Requisition status changed", tone: "amber" as Tone },
   candidate_created: { label: "Candidate added", tone: "cyan" as Tone },
   candidate_updated: { label: "Candidate updated", tone: "blue" as Tone },
+  candidate_merged: { label: "Records merged", tone: "violet" as Tone },
   submission_created: { label: "Added to pipeline", tone: "indigo" as Tone },
   stage_changed: { label: "Stage advanced", tone: "violet" as Tone },
   submission_rejected: { label: "Candidate rejected", tone: "rose" as Tone },

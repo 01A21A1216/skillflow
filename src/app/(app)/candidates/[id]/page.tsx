@@ -32,6 +32,8 @@ import {
   SubmissionStatusBadge,
 } from "@/components/domain/badges";
 import { AttachmentPanel } from "@/components/domain/attachment-panel";
+import { DuplicatePanel } from "@/components/domain/duplicate-panel";
+import { potentialDuplicates } from "@/server/queries/duplicates";
 import { EditCandidateButton } from "@/components/domain/forms/candidate-form";
 import { scorecardMap } from "@/server/queries/scorecards";
 import { AddToPipelineButton, NoteComposer } from "@/components/domain/forms/pipeline-form";
@@ -95,6 +97,16 @@ export default async function CandidateDetailPage({
   const openReqs = await openRequisitionOptions(c.id);
   const facets = await candidateFacets();
   const scorecardsByTemplate = await scorecardMap();
+  const duplicates = await potentialDuplicates({
+    id: c.id,
+    firstName: c.firstName,
+    lastName: c.lastName,
+    email: c.email,
+    phone: c.phone,
+    currentCompany: c.currentCompany,
+    location: c.location,
+    linkedinUrl: c.linkedinUrl,
+  });
 
   const active = submissions.filter((s) => s.submission.status === "active");
   const hired = submissions.find((s) => s.submission.status === "hired");
@@ -343,6 +355,13 @@ export default async function CandidateDetailPage({
                 <EmptyState compact icon={<CalendarDays className="size-5" />} title="No interviews yet" />
               )}
             </Card>
+
+            <DuplicatePanel
+              candidateId={c.id}
+              candidateName={name}
+              duplicates={duplicates}
+              canMerge={can(actor, "candidate.merge")}
+            />
 
             {/* Experience */}
             {experience.length ? (

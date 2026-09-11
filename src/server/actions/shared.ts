@@ -19,6 +19,11 @@ export interface ActionState {
   id?: string;
   /** Set when the write lost a race against another editor. */
   conflict?: boolean;
+  /**
+   * Set when a save was stopped because the record looks like a duplicate.
+   * The form offers to go ahead; submitting again carries `confirmDuplicate`.
+   */
+  duplicateWarning?: boolean;
 }
 
 export const IDLE: ActionState = { ok: false };

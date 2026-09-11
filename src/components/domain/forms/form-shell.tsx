@@ -35,6 +35,8 @@ export function useFormAction(
       toast({ kind: "error", title: "Could not save", description: state.message });
     } else if (state.conflict) {
       toast({ kind: "error", title: "Someone else saved first", description: state.message });
+    } else if (state.duplicateWarning) {
+      toast({ kind: "error", title: "Possible duplicate", description: state.message });
     }
     // `opts` is a fresh object each render; only the state transition matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -43,12 +45,22 @@ export function useFormAction(
   return { state, formAction, pending, errors: state.errors ?? {} };
 }
 
-export function FormError({ message, conflict }: { message?: string; conflict?: boolean }) {
+export function FormError({
+  message,
+  conflict,
+  warning,
+}: {
+  message?: string;
+  conflict?: boolean;
+  /** A question rather than a failure: submitting again goes ahead. */
+  warning?: boolean;
+}) {
   if (!message) return null;
 
-  // A lost write race is not a validation failure: it needs a reload, not a
-  // correction, so it reads differently.
-  const tone = conflict ? "amber" : "rose";
+  // Three different things wear three different colours. A lost write race
+  // needs a reload; a duplicate warning needs a decision; only a validation
+  // failure needs a correction.
+  const tone = conflict || warning ? "amber" : "rose";
   const Icon = conflict ? RefreshCw : AlertCircle;
 
   return (
@@ -93,7 +105,11 @@ export function FormModal({
   action: Action;
   submitLabel: string;
   size?: "sm" | "md" | "lg" | "xl";
-  children: (ctx: { errors: Record<string, string>; pending: boolean }) => ReactNode;
+  children: (ctx: {
+    errors: Record<string, string>;
+    pending: boolean;
+    state: ActionState;
+  }) => ReactNode;
   extraFooter?: ReactNode;
   onSuccess?: (state: ActionState) => void;
 }) {
@@ -125,10 +141,13 @@ export function FormModal({
     >
       <form id="form-modal" action={formAction} className="space-y-4">
         <FormError
-          message={state.errors || state.conflict ? state.message : undefined}
+          message={
+            state.errors || state.conflict || state.duplicateWarning ? state.message : undefined
+          }
           conflict={state.conflict}
+          warning={state.duplicateWarning}
         />
-        {children({ errors, pending })}
+        {children({ errors, pending, state })}
       </form>
     </Modal>
   );

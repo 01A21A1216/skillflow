@@ -36,6 +36,7 @@ export const PERMISSIONS = [
   { key: "candidate.pii", label: "View candidate contact details", category: "Candidates", description: "Email, phone and compensation. Redacted without this.", sensitive: true },
   { key: "candidate.create", label: "Add candidates", category: "Candidates", description: "Create a candidate record." },
   { key: "candidate.edit", label: "Edit candidates", category: "Candidates", description: "Change candidate details." },
+  { key: "candidate.merge", label: "Merge duplicate candidates", category: "Candidates", description: "Fold one candidate record into another, keeping both histories." },
 
   /* ---- Pipeline ---- */
   { key: "submission.create", label: "Add to a pipeline", category: "Pipeline", description: "Put a candidate forward for a requirement." },
@@ -105,6 +106,7 @@ const RECRUITER_CORE = [
   "candidate.pii",
   "candidate.create",
   "candidate.edit",
+  "candidate.merge",
   "submission.create",
   "submission.move",
   "submission.close",

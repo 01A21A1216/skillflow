@@ -54,8 +54,14 @@ export function CandidateFormModal({
         else router.refresh();
       }}
     >
-      {({ errors }) => (
+      {({ errors, state }) => (
         <>
+          {/* A second submit carries the override, so the same button that was
+              just refused is the one that goes through — no separate "save
+              anyway" control to find. */}
+          {state?.duplicateWarning ? (
+            <input type="hidden" name="confirmDuplicate" value="yes" />
+          ) : null}
           {editing ? (
             <>
               <input type="hidden" name="candidateId" value={candidate!.id} />
