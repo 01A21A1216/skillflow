@@ -118,7 +118,7 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
 | 3.1 | **AI assistant (natural-language querying)** | §15 | ❌ | XL | Must run every query through the same permission layer as the UI (0.2/0.3), not a privileged service account. |
-| 3.2 | **Resume ↔ requirement matching** | §16 | ❌ | L | Match %, matching/missing skills, location, work-auth, availability, rate, with cited evidence. Depends on 1.7 (required vs preferred) to score honestly. |
+| 3.2 | **Resume ↔ requirement matching** | §16 | ✅ | L | Done, and **deliberately deterministic**. Seven weighted factors summing to 100, each explaining itself in terms of the values it compared. Not a language model, for three reasons: §16 demands explainable evidence and "the model said 92%" is not evidence; ranking candidates for employment is a regulated automated decision tool and an auditor can read `src/lib/match-score.ts`; and skills, rate and authorization are already columns, so inferring them from prose would add error rather than intelligence. Nothing is filtered out — a candidate the client will not accept ranks low and is labelled. 15 tests double as the audit documentation. |
 | 3.3 | **JD parser** | §17 | ❌ | M | Recruiter reviews extracted fields before save — already specified, and correct. |
 | 3.4 | **Natural-language search** | §18 | 🟡 | M | ⌘K global search over requirements, candidates and people exists; it is literal substring matching, not natural language. |
 

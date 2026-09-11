@@ -31,6 +31,8 @@ import {
   WorkModeBadge,
 } from "@/components/domain/badges";
 import { AttachmentPanel } from "@/components/domain/attachment-panel";
+import { MatchPanel } from "@/components/domain/match-panel";
+import { rankForRequisition } from "@/server/queries/matching";
 import { EditRequisitionButton } from "@/components/domain/forms/requisition-form";
 import { scorecardOptions } from "@/server/queries/scorecards";
 import { NoteComposer } from "@/components/domain/forms/pipeline-form";
@@ -78,6 +80,11 @@ export default async function RequisitionDetailPage({
   const { id } = await params;
   const actor = await requirePermission("requisition.view.assigned");
   const stages = await loadPipeline();
+  // Matching (§16). Only for people who can actually put someone forward —
+  // ranking candidates in front of someone who cannot act on it is noise.
+  const matches = can(actor, "submission.create")
+    ? await rankForRequisition(id, actor, 20)
+    : null;
   // Out of scope reads as "not found" rather than "forbidden", so the page
   // does not confirm the existence of a record the actor may not see.
   const detail = await getRequisition(id, actor);
@@ -498,6 +505,15 @@ export default async function RequisitionDetailPage({
                 ]}
               />
             </Card>
+
+            {matches ? (
+              <MatchPanel
+                requisitionId={req.id}
+                requisitionCode={req.code}
+                ranked={matches.ranked}
+                canAdd={can(actor, "submission.create")}
+              />
+            ) : null}
 
             <AttachmentPanel
               entityType="requisition"
