@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 
 import type { Requisition } from "@/db/schema";
 import {
@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormModal } from "./form-shell";
+import { JdParserModal } from "./jd-parser";
 import { createRequisition, updateRequisition } from "@/server/actions/requisitions";
 
 export interface RequisitionFormOptions {
@@ -42,15 +43,25 @@ export function RequisitionFormModal({
   onClose,
   options,
   requisition,
+  prefill,
 }: {
   open: boolean;
   onClose: () => void;
   options: RequisitionFormOptions;
   /** Present when editing. */
   requisition?: Requisition;
+  /**
+   * Starting values for a new requirement, from the job-description parser
+   * (§17). Deliberately the same form as a blank one: a parse is a head start,
+   * not a second way of creating a record, and every field stays editable.
+   */
+  prefill?: Partial<Requisition>;
 }) {
   const router = useRouter();
   const editing = Boolean(requisition);
+  // `requisition` when editing, `prefill` when creating from a parse. Both
+  // populate the same defaults, so there is one form rather than two.
+  const initial = (requisition ?? prefill) as Partial<Requisition> | undefined;
   const departments = options.departments.length ? options.departments : DEPARTMENT_FALLBACK;
 
   return (
@@ -87,14 +98,14 @@ export function RequisitionFormModal({
             <Field label="Job title" required error={errors.title} className="sm:col-span-2">
               <Input
                 name="title"
-                defaultValue={requisition?.title}
+                defaultValue={initial?.title}
                 placeholder="Senior Backend Engineer"
                 required
               />
             </Field>
 
             <Field label="Client account" required error={errors.clientId}>
-              <Select name="clientId" defaultValue={requisition?.clientId} required>
+              <Select name="clientId" defaultValue={initial?.clientId} required>
                 <option value="">Select a client…</option>
                 {options.clients.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -105,7 +116,7 @@ export function RequisitionFormModal({
             </Field>
 
             <Field label="Department" required error={errors.department}>
-              <Select name="department" defaultValue={requisition?.department ?? "Engineering"} required>
+              <Select name="department" defaultValue={initial?.department ?? "Engineering"} required>
                 {departments.map((d) => (
                   <option key={d} value={d}>
                     {d}
@@ -115,7 +126,7 @@ export function RequisitionFormModal({
             </Field>
 
             <Field label="Hiring manager" required error={errors.hiringManagerId}>
-              <Select name="hiringManagerId" defaultValue={requisition?.hiringManagerId} required>
+              <Select name="hiringManagerId" defaultValue={initial?.hiringManagerId} required>
                 <option value="">Select…</option>
                 {options.hiringManagers.map((u) => (
                   <option key={u.id} value={u.id}>
@@ -126,7 +137,7 @@ export function RequisitionFormModal({
             </Field>
 
             <Field label="Lead recruiter" required error={errors.leadRecruiterId}>
-              <Select name="leadRecruiterId" defaultValue={requisition?.leadRecruiterId} required>
+              <Select name="leadRecruiterId" defaultValue={initial?.leadRecruiterId} required>
                 <option value="">Select…</option>
                 {options.recruiters.map((u) => (
                   <option key={u.id} value={u.id}>
@@ -140,10 +151,10 @@ export function RequisitionFormModal({
               hint="Who picks this up when the lead is away."
               error={errors.backupRecruiterId}
             >
-              <Select name="backupRecruiterId" defaultValue={requisition?.backupRecruiterId ?? ""}>
+              <Select name="backupRecruiterId" defaultValue={initial?.backupRecruiterId ?? ""}>
                 <option value="">None</option>
                 {options.recruiters
-                  .filter((u) => u.id !== requisition?.leadRecruiterId)
+                  .filter((u) => u.id !== initial?.leadRecruiterId)
                   .map((u) => (
                     <option key={u.id} value={u.id}>
                       {u.name}
@@ -152,7 +163,7 @@ export function RequisitionFormModal({
               </Select>
             </Field>
             <Field label="How it reached us" error={errors.source}>
-              <Select name="source" defaultValue={requisition?.source ?? "client_direct"}>
+              <Select name="source" defaultValue={initial?.source ?? "client_direct"}>
                 {REQUISITION_SOURCES.map((r) => (
                   <option key={r.value} value={r.value}>
                     {r.label}
@@ -168,7 +179,7 @@ export function RequisitionFormModal({
               >
                 <Select
                   name="scorecardTemplateId"
-                  defaultValue={requisition?.scorecardTemplateId ?? ""}
+                  defaultValue={initial?.scorecardTemplateId ?? ""}
                 >
                   <option value="">Default</option>
                   {options.scorecards.map((t) => (
@@ -183,7 +194,7 @@ export function RequisitionFormModal({
 
           <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Employment type" error={errors.employmentType}>
-              <Select name="employmentType" defaultValue={requisition?.employmentType ?? "full_time"}>
+              <Select name="employmentType" defaultValue={initial?.employmentType ?? "full_time"}>
                 {EMPLOYMENT_TYPES.map((t) => (
                   <option key={t.value} value={t.value}>
                     {t.label}
@@ -193,7 +204,7 @@ export function RequisitionFormModal({
             </Field>
 
             <Field label="Work mode" error={errors.workMode}>
-              <Select name="workMode" defaultValue={requisition?.workMode ?? "hybrid"}>
+              <Select name="workMode" defaultValue={initial?.workMode ?? "hybrid"}>
                 {WORK_MODES.map((t) => (
                   <option key={t.value} value={t.value}>
                     {t.label}
@@ -203,7 +214,7 @@ export function RequisitionFormModal({
             </Field>
 
             <Field label="Level" error={errors.seniority}>
-              <Select name="seniority" defaultValue={requisition?.seniority ?? "mid"}>
+              <Select name="seniority" defaultValue={initial?.seniority ?? "mid"}>
                 {SENIORITIES.map((t) => (
                   <option key={t.value} value={t.value}>
                     {t.label}
@@ -215,7 +226,7 @@ export function RequisitionFormModal({
             <Field label="Location" required error={errors.location} className="sm:col-span-2">
               <Input
                 name="location"
-                defaultValue={requisition?.location}
+                defaultValue={initial?.location}
                 placeholder="Austin, TX"
                 required
               />
@@ -227,7 +238,7 @@ export function RequisitionFormModal({
                 type="number"
                 min={1}
                 max={50}
-                defaultValue={requisition?.openings ?? 1}
+                defaultValue={initial?.openings ?? 1}
               />
             </Field>
           </div>
@@ -239,7 +250,7 @@ export function RequisitionFormModal({
                 type="number"
                 min={0}
                 step={1000}
-                defaultValue={requisition?.minSalary ?? undefined}
+                defaultValue={initial?.minSalary ?? undefined}
                 placeholder="150000"
               />
             </Field>
@@ -249,7 +260,7 @@ export function RequisitionFormModal({
                 type="number"
                 min={0}
                 step={1000}
-                defaultValue={requisition?.maxSalary ?? undefined}
+                defaultValue={initial?.maxSalary ?? undefined}
                 placeholder="195000"
               />
             </Field>
@@ -259,7 +270,7 @@ export function RequisitionFormModal({
                 type="number"
                 min={0}
                 max={40}
-                defaultValue={requisition?.experienceMin ?? 3}
+                defaultValue={initial?.experienceMin ?? 3}
               />
             </Field>
             <Field label="Experience max" hint="Years" error={errors.experienceMax}>
@@ -268,14 +279,14 @@ export function RequisitionFormModal({
                 type="number"
                 min={0}
                 max={40}
-                defaultValue={requisition?.experienceMax ?? 8}
+                defaultValue={initial?.experienceMax ?? 8}
               />
             </Field>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Priority" error={errors.priority}>
-              <Select name="priority" defaultValue={requisition?.priority ?? "medium"}>
+              <Select name="priority" defaultValue={initial?.priority ?? "medium"}>
                 {PRIORITIES.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
@@ -284,7 +295,7 @@ export function RequisitionFormModal({
               </Select>
             </Field>
             <Field label="Status" error={errors.status}>
-              <Select name="status" defaultValue={requisition?.status ?? "open"}>
+              <Select name="status" defaultValue={initial?.status ?? "open"}>
                 {AUTHORED_REQ_STATUSES.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
@@ -296,7 +307,7 @@ export function RequisitionFormModal({
               <Input
                 name="targetFillDate"
                 type="date"
-                defaultValue={requisition?.targetFillDate ?? undefined}
+                defaultValue={initial?.targetFillDate ?? undefined}
               />
             </Field>
           </div>
@@ -308,7 +319,7 @@ export function RequisitionFormModal({
           >
             <Input
               name="requiredSkills"
-              defaultValue={(requisition?.requiredSkills ?? []).join(", ")}
+              defaultValue={(initial?.requiredSkills ?? []).join(", ")}
               placeholder="Oracle EBS, PL/SQL, Oracle Fusion"
             />
           </Field>
@@ -320,7 +331,7 @@ export function RequisitionFormModal({
           >
             <Input
               name="preferredSkills"
-              defaultValue={(requisition?.preferredSkills ?? []).join(", ")}
+              defaultValue={(initial?.preferredSkills ?? []).join(", ")}
               placeholder="OIC, SOA Suite, Kubernetes"
             />
           </Field>
@@ -336,7 +347,7 @@ export function RequisitionFormModal({
                   key={w.value}
                   name="visaRequirements"
                   value={w.value}
-                  defaultChecked={(requisition?.visaRequirements ?? []).includes(w.value)}
+                  defaultChecked={(initial?.visaRequirements ?? []).includes(w.value)}
                   label={w.label}
                 />
               ))}
@@ -346,7 +357,7 @@ export function RequisitionFormModal({
           <Field label="Role summary" error={errors.description}>
             <Textarea
               name="description"
-              defaultValue={requisition?.description}
+              defaultValue={initial?.description}
               placeholder="What this person will own, and why the role exists."
             />
           </Field>
@@ -358,7 +369,7 @@ export function RequisitionFormModal({
           >
             <Textarea
               name="requirements"
-              defaultValue={(requisition?.requirements ?? []).join("\n")}
+              defaultValue={(initial?.requirements ?? []).join("\n")}
               placeholder={"Production ownership of a high-throughput service\nStrong relational data modelling"}
             />
           </Field>
@@ -377,13 +388,24 @@ export function NewRequisitionButton({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [parsing, setParsing] = useState(false);
+
   return (
     <>
-      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
-        <Plus className="size-4" />
-        New requisition
-      </Button>
+      <div className="flex items-center gap-1.5">
+        {/* Most requirements arrive as a pasted job description, so reading
+            one is offered beside the blank form rather than buried in it. */}
+        <Button variant="secondary" size="sm" onClick={() => setParsing(true)}>
+          <Sparkles className="size-4" />
+          From a JD
+        </Button>
+        <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+          <Plus className="size-4" />
+          New requisition
+        </Button>
+      </div>
       <RequisitionFormModal open={open} onClose={() => setOpen(false)} options={options} />
+      <JdParserModal open={parsing} onClose={() => setParsing(false)} options={options} />
     </>
   );
 }
