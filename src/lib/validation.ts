@@ -1,0 +1,247 @@
+import { z } from "zod";
+
+import {
+  CANDIDATE_STATUSES,
+  DECLINE_REASONS,
+  EMPLOYMENT_TYPES,
+  INTERVIEW_MODES,
+  INTERVIEW_TYPES,
+  OFFER_STATUSES,
+  PIPELINE_STAGES,
+  PRIORITIES,
+  RECOMMENDATIONS,
+  REJECTION_REASONS,
+  REQ_STATUSES,
+  SENIORITIES,
+  SOURCES,
+  WORK_MODES,
+} from "./domain";
+
+const values = <T extends { value: string }>(list: T[]) =>
+  list.map((m) => m.value) as [string, ...string[]];
+
+const nonEmpty = (label: string, max = 200) =>
+  z.string().trim().min(1, `${label} is required`).max(max, `${label} is too long`);
+
+const optionalText = (max = 4000) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .optional()
+    .transform((v) => (v ? v : undefined));
+
+const money = z.coerce.number().int().min(0).max(10_000_000);
+
+/** Comma or newline separated list -> trimmed, de-duplicated array. */
+export const listField = z
+  .string()
+  .optional()
+  .transform((v) =>
+    Array.from(
+      new Set(
+        (v ?? "")
+          .split(/[\n,]/)
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    ),
+  );
+
+/* ------------------------------------------------------------------ *
+ * Requisitions
+ * ------------------------------------------------------------------ */
+
+export const requisitionSchema = z
+  .object({
+    title: nonEmpty("Job title"),
+    clientId: nonEmpty("Client"),
+    hiringManagerId: nonEmpty("Hiring manager"),
+    leadRecruiterId: nonEmpty("Lead recruiter"),
+    department: nonEmpty("Department", 80),
+    employmentType: z.enum(values(EMPLOYMENT_TYPES)),
+    workMode: z.enum(values(WORK_MODES)),
+    seniority: z.enum(values(SENIORITIES)),
+    priority: z.enum(values(PRIORITIES)),
+    status: z.enum(values(REQ_STATUSES)).default("open"),
+    location: nonEmpty("Location", 120),
+    openings: z.coerce.number().int().min(1).max(50),
+    minSalary: money.optional(),
+    maxSalary: money.optional(),
+    experienceMin: z.coerce.number().int().min(0).max(40).default(0),
+    experienceMax: z.coerce.number().int().min(0).max(40).default(10),
+    skills: listField,
+    requirements: listField,
+    description: optionalText(),
+    targetFillDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
+      .optional()
+      .or(z.literal("").transform(() => undefined)),
+  })
+  .refine((d) => d.minSalary == null || d.maxSalary == null || d.maxSalary >= d.minSalary, {
+    message: "Maximum salary must be at least the minimum",
+    path: ["maxSalary"],
+  })
+  .refine((d) => d.experienceMax >= d.experienceMin, {
+    message: "Maximum experience must be at least the minimum",
+    path: ["experienceMax"],
+  });
+
+export const requisitionStatusSchema = z.object({
+  requisitionId: nonEmpty("Requisition"),
+  status: z.enum(values(REQ_STATUSES)),
+  reason: optionalText(500),
+});
+
+/* ------------------------------------------------------------------ *
+ * Candidates
+ * ------------------------------------------------------------------ */
+
+export const candidateSchema = z.object({
+  firstName: nonEmpty("First name", 80),
+  lastName: nonEmpty("Last name", 80),
+  email: z.string().trim().toLowerCase().email("Enter a valid email address"),
+  phone: optionalText(40),
+  location: nonEmpty("Location", 120),
+  currentTitle: nonEmpty("Current title", 120),
+  currentCompany: nonEmpty("Current company", 120),
+  yearsExperience: z.coerce.number().min(0).max(60),
+  seniority: z.enum(values(SENIORITIES)),
+  source: z.enum(values(SOURCES)),
+  sourceDetail: optionalText(160),
+  ownerId: nonEmpty("Owner"),
+  status: z.enum(values(CANDIDATE_STATUSES)).default("new"),
+  expectedSalary: money.optional(),
+  currentSalary: money.optional(),
+  noticePeriodDays: z.coerce.number().int().min(0).max(180).default(14),
+  workAuthorization: z.enum(["citizen", "permanent_resident", "visa_holder", "requires_sponsorship"]),
+  willingToRelocate: z.coerce.boolean().default(false),
+  linkedinUrl: z
+    .string()
+    .trim()
+    .url("Enter a valid URL")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  rating: z.coerce.number().int().min(0).max(5).default(0),
+  skills: listField,
+  tags: listField,
+  summary: optionalText(2000),
+});
+
+/* ------------------------------------------------------------------ *
+ * Pipeline
+ * ------------------------------------------------------------------ */
+
+export const addToPipelineSchema = z.object({
+  candidateId: nonEmpty("Candidate"),
+  requisitionId: nonEmpty("Requisition"),
+  stage: z.enum(values(PIPELINE_STAGES)).default("sourced"),
+  matchScore: z.coerce.number().int().min(0).max(100).default(70),
+  note: optionalText(1000),
+});
+
+export const moveStageSchema = z.object({
+  submissionId: nonEmpty("Submission"),
+  stage: z.enum(values(PIPELINE_STAGES)),
+  note: optionalText(1000),
+});
+
+export const rejectSchema = z.object({
+  submissionId: nonEmpty("Submission"),
+  outcome: z.enum(["rejected", "withdrawn"]),
+  reason: z.enum(REJECTION_REASONS as unknown as [string, ...string[]]),
+  note: optionalText(1000),
+});
+
+export const reopenSchema = z.object({
+  submissionId: nonEmpty("Submission"),
+  stage: z.enum(values(PIPELINE_STAGES)).default("screening"),
+});
+
+/* ------------------------------------------------------------------ *
+ * Interviews and feedback
+ * ------------------------------------------------------------------ */
+
+export const interviewSchema = z.object({
+  submissionId: nonEmpty("Submission"),
+  title: nonEmpty("Interview title", 120),
+  type: z.enum(values(INTERVIEW_TYPES)),
+  mode: z.enum(values(INTERVIEW_MODES)),
+  scheduledAt: z.string().min(1, "Pick a date and time"),
+  durationMinutes: z.coerce.number().int().min(15).max(480),
+  locationOrLink: optionalText(300),
+  agenda: optionalText(1000),
+  panelIds: z.array(z.string()).min(1, "Add at least one interviewer"),
+  organizerId: nonEmpty("Organiser"),
+});
+
+export const interviewOutcomeSchema = z.object({
+  interviewId: nonEmpty("Interview"),
+  status: z.enum(["scheduled", "completed", "cancelled", "no_show", "rescheduled"]),
+  outcome: z
+    .enum(["strong_yes", "yes", "lean_yes", "lean_no", "no", "strong_no", "pending"])
+    .default("pending"),
+});
+
+export const feedbackSchema = z.object({
+  interviewId: nonEmpty("Interview"),
+  interviewerId: nonEmpty("Interviewer"),
+  recommendation: z.enum(values(RECOMMENDATIONS)),
+  overall: z.coerce.number().int().min(1).max(5),
+  technical: z.coerce.number().int().min(1).max(5),
+  communication: z.coerce.number().int().min(1).max(5),
+  problemSolving: z.coerce.number().int().min(1).max(5),
+  cultureFit: z.coerce.number().int().min(1).max(5),
+  strengths: optionalText(2000),
+  concerns: optionalText(2000),
+  notes: optionalText(4000),
+});
+
+/* ------------------------------------------------------------------ *
+ * Offers
+ * ------------------------------------------------------------------ */
+
+export const offerSchema = z.object({
+  submissionId: nonEmpty("Submission"),
+  baseSalary: money,
+  bonusPercent: z.coerce.number().min(0).max(200).default(0),
+  signingBonus: money.default(0),
+  equityUnits: z.coerce.number().int().min(0).max(10_000_000).default(0),
+  startDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  expiresAt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  notes: optionalText(2000),
+});
+
+export const offerTransitionSchema = z.object({
+  offerId: nonEmpty("Offer"),
+  status: z.enum(values(OFFER_STATUSES)),
+  declineReason: z
+    .enum(DECLINE_REASONS as unknown as [string, ...string[]])
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+});
+
+/* ------------------------------------------------------------------ *
+ * Notes
+ * ------------------------------------------------------------------ */
+
+export const noteSchema = z.object({
+  entityType: z.enum(["candidate", "requisition", "submission"]),
+  entityId: nonEmpty("Entity"),
+  body: nonEmpty("Note", 4000),
+  pinned: z.coerce.boolean().default(false),
+});
+
+export type RequisitionInput = z.infer<typeof requisitionSchema>;
+export type CandidateInput = z.infer<typeof candidateSchema>;
+export type InterviewInput = z.infer<typeof interviewSchema>;
+export type OfferInput = z.infer<typeof offerSchema>;

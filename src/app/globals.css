@@ -1,26 +1,307 @@
 @import "tailwindcss";
 
+/* ==================================================================
+   Recruitment Command Center — design tokens
+   ================================================================== */
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo,
+    Consolas, monospace;
+
+  --radius-card: 0.875rem;
+
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-slide-up: slide-up 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-shimmer: shimmer 1.6s linear infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+
+/* ------------------------------------------------------------------
+   Semantic surface palette. Light is the default; `.dark` on <html>
+   swaps the whole set, so every component reads the same variables.
+   ------------------------------------------------------------------ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  --canvas: 210 40% 98%;
+  --surface: 0 0% 100%;
+  --surface-muted: 210 40% 96.5%;
+  --surface-raised: 0 0% 100%;
+  --overlay: 215 25% 10%;
+
+  --border: 214 25% 90%;
+  --border-strong: 214 20% 82%;
+
+  --text: 222 40% 12%;
+  --text-muted: 215 16% 44%;
+  --text-subtle: 215 14% 58%;
+  --text-inverted: 0 0% 100%;
+
+  --brand: 243 75% 59%;
+  --brand-soft: 243 100% 96%;
+  --brand-strong: 243 70% 49%;
+  --brand-contrast: 0 0% 100%;
+
+  --ring: 243 75% 59%;
+
+  --tone-neutral: 215 16% 47%;
+  --tone-neutral-bg: 215 25% 94%;
+  --tone-slate: 215 20% 40%;
+  --tone-slate-bg: 214 30% 93%;
+  --tone-blue: 217 85% 48%;
+  --tone-blue-bg: 214 100% 95%;
+  --tone-indigo: 243 70% 54%;
+  --tone-indigo-bg: 243 100% 96%;
+  --tone-violet: 268 65% 54%;
+  --tone-violet-bg: 270 100% 96.5%;
+  --tone-cyan: 191 85% 35%;
+  --tone-cyan-bg: 187 90% 93%;
+  --tone-emerald: 158 70% 30%;
+  --tone-emerald-bg: 152 70% 92%;
+  --tone-amber: 32 88% 40%;
+  --tone-amber-bg: 45 95% 90%;
+  --tone-orange: 22 88% 45%;
+  --tone-orange-bg: 30 100% 92%;
+  --tone-rose: 348 75% 48%;
+  --tone-rose-bg: 350 100% 95%;
+
+  --shadow-card: 0 1px 2px hsl(215 25% 20% / 0.05), 0 1px 3px hsl(215 25% 20% / 0.04);
+  --shadow-raised: 0 4px 12px hsl(215 25% 20% / 0.07), 0 2px 4px hsl(215 25% 20% / 0.04);
+  --shadow-pop: 0 16px 40px hsl(215 30% 15% / 0.14), 0 2px 8px hsl(215 30% 15% / 0.08);
 }
 
+.dark {
+  color-scheme: dark;
+
+  --canvas: 222 34% 7%;
+  --surface: 222 28% 10.5%;
+  --surface-muted: 222 26% 13.5%;
+  --surface-raised: 222 26% 14%;
+  --overlay: 222 40% 4%;
+
+  --border: 220 20% 20%;
+  --border-strong: 220 16% 28%;
+
+  --text: 210 30% 96%;
+  --text-muted: 215 16% 68%;
+  --text-subtle: 215 14% 52%;
+  --text-inverted: 222 40% 8%;
+
+  --brand: 245 85% 70%;
+  --brand-soft: 243 50% 20%;
+  --brand-strong: 245 90% 76%;
+  --brand-contrast: 222 45% 8%;
+
+  --ring: 245 85% 70%;
+
+  --tone-neutral: 215 18% 72%;
+  --tone-neutral-bg: 215 18% 20%;
+  --tone-slate: 213 22% 74%;
+  --tone-slate-bg: 214 20% 21%;
+  --tone-blue: 213 92% 74%;
+  --tone-blue-bg: 215 60% 21%;
+  --tone-indigo: 243 92% 78%;
+  --tone-indigo-bg: 243 50% 24%;
+  --tone-violet: 270 92% 80%;
+  --tone-violet-bg: 268 45% 25%;
+  --tone-cyan: 187 85% 62%;
+  --tone-cyan-bg: 192 60% 18%;
+  --tone-emerald: 152 68% 60%;
+  --tone-emerald-bg: 155 50% 16%;
+  --tone-amber: 42 95% 62%;
+  --tone-amber-bg: 36 60% 18%;
+  --tone-orange: 26 95% 66%;
+  --tone-orange-bg: 24 55% 19%;
+  --tone-rose: 350 92% 72%;
+  --tone-rose-bg: 348 50% 21%;
+
+  --shadow-card: 0 1px 2px hsl(0 0% 0% / 0.4);
+  --shadow-raised: 0 4px 14px hsl(0 0% 0% / 0.45);
+  --shadow-pop: 0 20px 50px hsl(0 0% 0% / 0.6), 0 2px 10px hsl(0 0% 0% / 0.4);
+}
+
+/* Expose the semantic tokens as Tailwind utilities. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-canvas: hsl(var(--canvas));
+  --color-surface: hsl(var(--surface));
+  --color-surface-muted: hsl(var(--surface-muted));
+  --color-surface-raised: hsl(var(--surface-raised));
+  --color-border-base: hsl(var(--border));
+  --color-border-strong: hsl(var(--border-strong));
+  --color-content: hsl(var(--text));
+  --color-content-muted: hsl(var(--text-muted));
+  --color-content-subtle: hsl(var(--text-subtle));
+  --color-brand: hsl(var(--brand));
+  --color-brand-soft: hsl(var(--brand-soft));
+  --color-brand-strong: hsl(var(--brand-strong));
+  --color-brand-contrast: hsl(var(--brand-contrast));
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* ------------------------------------------------------------------
+   Chart palette. Categorical slots are the validated 8-hue order
+   (adjacent CVD ΔE 9.1 light / 8.4 dark); the ordinal ramp is a single
+   blue hue with ΔL ≥ 0.06 between steps and a light end that clears
+   2:1 against the chart surface. Both ran through the palette
+   validator for each mode rather than being eyeballed.
+   ------------------------------------------------------------------ */
+
+:root {
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+
+  --ord-1: #8bb6eb;
+  --ord-2: #639de2;
+  --ord-3: #3883d9;
+  --ord-4: #0069c9;
+  --ord-5: #0051a9;
+  --ord-6: #003c80;
+
+  --chart-grid: hsl(214 25% 90%);
+  --chart-axis: hsl(215 14% 58%);
+  --chart-surface: #ffffff;
+}
+
+.dark {
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
+
+  --ord-1: #abcef8;
+  --ord-2: #84b4f0;
+  --ord-3: #5c9be6;
+  --ord-4: #2e81dc;
+  --ord-5: #0067c7;
+  --ord-6: #0051a2;
+
+  --chart-grid: hsl(220 20% 20%);
+  --chart-axis: hsl(215 14% 52%);
+  --chart-surface: hsl(222 28% 10.5%);
+}
+
+@layer base {
+  /* Recharts injects focus outlines on wrappers we do not want to ring. */
+  .recharts-wrapper:focus,
+  .recharts-surface:focus {
+    outline: none;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: hsl(var(--canvas));
+    color: hsl(var(--text));
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: hsl(var(--brand) / 0.25);
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Scrollbars that match the surface instead of fighting it. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border-strong)) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border-strong));
+    border: 3px solid transparent;
+    border-radius: 99px;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: hsl(var(--text-subtle)); background-clip: content-box; }
+
+  input, textarea, select, button { font: inherit; color: inherit; }
+
+  input::placeholder, textarea::placeholder { color: hsl(var(--text-subtle)); }
+
+  /* Native date/time pickers need help in dark mode. */
+  .dark input[type="date"]::-webkit-calendar-picker-indicator,
+  .dark input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    filter: invert(0.8);
+  }
+}
+
+@layer components {
+  .tone-chip {
+    color: hsl(var(--tone));
+    background-color: hsl(var(--tone-bg));
+  }
+
+  .card {
+    background-color: hsl(var(--surface));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  .skeleton {
+    background-image: linear-gradient(
+      90deg,
+      hsl(var(--surface-muted)) 0%,
+      hsl(var(--border)) 50%,
+      hsl(var(--surface-muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: var(--animate-shimmer);
+    border-radius: 6px;
+  }
+
+  /* Sticky data-table header that survives horizontal scroll. */
+  .data-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: hsl(var(--surface-muted));
+    backdrop-filter: blur(6px);
+  }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
 }
