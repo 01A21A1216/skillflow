@@ -26,7 +26,7 @@ with another database already running on your machine.
 |---|---|
 | **Dashboard** | Eight operational KPIs, a ranked action queue (overdue scorecards, expiring offers, stalled candidates, at-risk requisitions), the 180-day conversion funnel, throughput small multiples, live pipeline composition, requisitions needing attention, and a team activity feed. |
 | **Requisitions** | Filterable register with a derived **health** verdict per requisition, inline pipeline composition, openings filled, target-date tracking. Full detail view with an embedded drag-and-drop board, interviews, offers, close-out reasons, the brief, the working team and stage SLAs. |
-| **Pipeline** | Global kanban across every requisition. Drag a candidate between stages and the move is written to their timeline, with optimistic repaint and a toast. Per-card actions for advancing, scheduling a loop, drafting an offer or closing out. |
+| **Pipeline** | Global kanban across the eleven specified stages. Drag a candidate between stages and the move is written to their timeline, with optimistic repaint and a toast. Per-card actions for advancing, scheduling a loop, drafting an offer, parking on hold or closing out. Cards carry the candidate's work authorization and flag anyone the client will not accept. |
 | **Candidates** | Searchable talent pool with skill, seniority, source, ownership, work-authorisation and pipeline-state facets. Profiles show every requisition they have touched, the full interview history with scorecards, offers, an averaged competency chart and notes. |
 | **Interviews** | Schedule grouped by day, panel composition with per-panelist feedback status, an "awaiting feedback" queue, and scorecard submission. Once every panelist has submitted, the round outcome settles automatically from the balance of recommendations. |
 | **Offers** | Offer register with a legal-transition state machine, position against the approved salary band, total compensation, expiry tracking, decline-reason capture and acceptance-rate trend. |
@@ -99,6 +99,20 @@ the validation schemas and every badge in the UI read from the same table, so th
 drift apart. Stage SLAs live there too, which is what drives the aging chips and the "past
 the stage target" counts.
 
+**Pipeline stages** are the eleven from the specification — New, Screening, Qualified,
+Submitted, Client Review, Interview Scheduled, Interview Completed, Feedback Pending,
+Selected, Offer, Joined — plus Rejected, Withdrawn and On Hold as terminal states. The
+three interview-band stages are not three things a recruiter has to remember to click:
+they are recomputed from the actual interviews and scorecards whenever either changes, so
+"Feedback Pending" always means somebody genuinely owes a scorecard.
+
+**Requirement statuses** are the specification's ten, but only six of them are decisions.
+Draft, Open, On hold, Filled, Cancelled and Closed are set by a person and stored on the
+row; Active Sourcing, Candidate Submitted, Interviewing and Offer describe how far the
+pipeline has got and are derived on read. Storing those four would create a second source
+of truth that disagrees with the board the moment anyone moves a card, so the status menu
+offers only the six and the requirement is *displayed* as whatever its pipeline says.
+
 ### Access control
 
 Three rules keep this auditable rather than clever:
@@ -163,7 +177,12 @@ Business rules are enforced in the action layer, not the UI:
   the offer that was approved.
 - Adding a candidate straight into a later stage backfills the earlier stage events, so
   funnel analytics stay honest.
-- Scheduling a loop for someone still in screening advances them to the interview stage.
+- Scheduling a loop advances a candidate to Interview Scheduled, but never drags anyone
+  backwards: somebody already at Selected who picks up an extra round keeps their stage.
+- On Hold is reversible and does not cost a candidate their place — reopening reads the
+  stage they left back off the stage history rather than restarting them at Screening.
+- A requirement's accepted work authorizations and a candidate's own are the same
+  vocabulary, so the board can flag a candidate the client will not accept.
 - Declining feedback only counts once every panelist has weighed in; the round outcome is
   then derived from the balance of recommendations rather than asked for twice.
 
@@ -203,9 +222,15 @@ forwards through history. That is what makes the derived metrics — time to fil
 velocity, source conversion, offer acceptance — agree with each other instead of being
 independently random.
 
-Roughly: 29 people, 12 client accounts, 55 requisitions, ~1,300 candidates and submissions,
-~4,400 stage events, ~830 interviews, ~790 scorecards, ~130 offers and ~6,200 activity
-entries.
+Eight requirements are reserved as this fortnight's intake and the rest carry real
+history, so both ends of the desk are populated: fresh requirements still only sourcing,
+and old ones with twelve months of funnel behind them. How far a candidate can have got is
+capped by how long their requirement has been open — a role posted last week cannot have
+somebody at offer.
+
+Roughly: 30 people, 12 client accounts, 54 requisitions, ~1,150 candidates and submissions,
+~5,000 stage events, ~600 interviews, ~600 scorecards, ~60 offers and ~5,000 activity
+entries, with about 220 live candidates spread across all ten working stages.
 
 The generator is seeded, so the same database comes out every time. Re-running it drops and
 recreates the tables **in place** rather than deleting the file, so it works while the dev

@@ -63,7 +63,7 @@ export async function funnel(since?: Date): Promise<FunnelStep[]> {
     );
 
   const byStage = new Map(rows.map((r) => [r.stage, r.count]));
-  const top = byStage.get("sourced") ?? 0;
+  const top = byStage.get(PIPELINE_STAGES[0]!.value) ?? 0;
 
   return PIPELINE_STAGES.map((meta, i) => {
     const count = byStage.get(meta.value) ?? 0;
@@ -123,7 +123,7 @@ export async function stageVelocity(since?: Date): Promise<StageVelocity[]> {
     prev = { stage: e.toStage, at: e.createdAt.getTime() };
   }
 
-  return PIPELINE_STAGES.filter((s) => s.value !== "hired").map((meta) => {
+  return PIPELINE_STAGES.filter((s) => s.value !== "joined").map((meta) => {
     const values = durations.get(meta.value) ?? [];
     return {
       stage: meta.value,
@@ -228,11 +228,14 @@ export async function monthlyTrend(months = 12): Promise<MonthPoint[]> {
   for (const e of events) {
     const bucket = buckets.get(keyOf(e.createdAt));
     if (!bucket) continue;
-    if (e.toStage === "sourced") bucket.added += 1;
+    // One event per stage entered, so each milestone is counted from the
+    // stage that marks entry: Interview Scheduled is where the loop begins,
+    // not all three interview stages, which would triple-count one candidate.
+    if (e.toStage === "new") bucket.added += 1;
     if (e.toStage === "submitted") bucket.submitted += 1;
-    if (e.toStage === "interview") bucket.interviewed += 1;
+    if (e.toStage === "interview_scheduled") bucket.interviewed += 1;
     if (e.toStage === "offer") bucket.offers += 1;
-    if (e.toStage === "hired") bucket.hires += 1;
+    if (e.toStage === "joined") bucket.hires += 1;
   }
 
   return [...buckets.values()];
@@ -312,8 +315,8 @@ export async function sourceEffectiveness(since?: Date): Promise<SourceStat[]> {
   for (const r of reached) {
     const entry = ensure(r.source);
     if (r.toStage === "submitted") entry.submitted = r.count;
-    if (r.toStage === "interview") entry.interviewed = r.count;
-    if (r.toStage === "hired") entry.hires = r.count;
+    if (r.toStage === "interview_scheduled") entry.interviewed = r.count;
+    if (r.toStage === "joined") entry.hires = r.count;
   }
 
   return [...map.values()]

@@ -13,11 +13,17 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { CalendarClock, GripVertical, Star } from "lucide-react";
+import { CalendarClock, GripVertical, ShieldAlert, Star } from "lucide-react";
 
 import type { PipelineCard } from "@/server/queries/pipeline";
 import { moveStageById } from "@/server/actions/pipeline";
-import { ACTIVE_STAGES, STAGE, type Stage } from "@/lib/domain";
+import {
+  ACTIVE_STAGES,
+  STAGE,
+  WORK_AUTHORIZATION,
+  type Stage,
+  type WorkAuthorization,
+} from "@/lib/domain";
 import { cn, formatDate, formatTime } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { Avatar } from "@/components/ui/avatar";
@@ -267,6 +273,19 @@ function Card({
           <div className="mt-2">
             <SkillChips skills={card.candidateSkills} max={3} matched={requiredSkills} />
           </div>
+
+          <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-content-subtle">
+            <span>{WORK_AUTHORIZATION[card.candidateWorkAuthorization as WorkAuthorization]?.label ?? card.candidateWorkAuthorization}</span>
+            {card.visaMismatch ? (
+              <span
+                className="flex items-center gap-1 text-[hsl(var(--tone-rose))]"
+                title="This client does not accept that work authorization"
+              >
+                <ShieldAlert className="size-3 shrink-0" />
+                not accepted
+              </span>
+            ) : null}
+          </p>
 
           {card.nextInterviewAt ? (
             <p className="mt-2 flex items-center gap-1.5 text-[11px] text-[hsl(var(--tone-violet))]">

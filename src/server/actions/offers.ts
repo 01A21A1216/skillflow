@@ -231,7 +231,7 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
 
     if (to === "accepted") {
       (await tx.update(submissions)
-        .set({ stage: "hired", status: "hired", stageSince: now, updatedAt: now })
+        .set({ stage: "joined", status: "hired", stageSince: now, updatedAt: now })
         .where(eq(submissions.id, offer.submissionId))
         );
 
@@ -240,7 +240,7 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
           id: newId("stg"),
           submissionId: offer.submissionId,
           fromStage: ctx.submission.stage,
-          toStage: "hired",
+          toStage: "joined",
           actorId: actor.id,
           note: "Offer accepted",
           createdAt: now,

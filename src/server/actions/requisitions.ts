@@ -70,7 +70,9 @@ async function createRequisitionImpl(actor: User, formData: FormData): Promise<A
       currency: "USD",
       experienceMin: input.experienceMin,
       experienceMax: input.experienceMax,
-      skills: input.skills,
+      requiredSkills: input.requiredSkills,
+      preferredSkills: input.preferredSkills,
+      visaRequirements: input.visaRequirements,
       description: input.description ?? "",
       requirements: input.requirements,
       openedAt: today,
@@ -132,7 +134,9 @@ async function updateRequisitionImpl(actor: User, formData: FormData): Promise<A
     targetFillDate: "Target fill date",
     leadRecruiterId: "Lead recruiter",
     hiringManagerId: "Hiring manager",
-    skills: "Must-have skills",
+    requiredSkills: "Must-have skills",
+    preferredSkills: "Nice-to-have skills",
+    visaRequirements: "Accepted work authorization",
   });
 
   (await db.update(requisitions)
@@ -153,7 +157,9 @@ async function updateRequisitionImpl(actor: User, formData: FormData): Promise<A
       maxSalary: input.maxSalary ?? null,
       experienceMin: input.experienceMin,
       experienceMax: input.experienceMax,
-      skills: input.skills,
+      requiredSkills: input.requiredSkills,
+      preferredSkills: input.preferredSkills,
+      visaRequirements: input.visaRequirements,
       description: input.description ?? "",
       requirements: input.requirements,
       targetFillDate: input.targetFillDate ?? null,

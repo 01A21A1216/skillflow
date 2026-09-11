@@ -6,14 +6,15 @@ import { Plus } from "lucide-react";
 
 import type { Requisition } from "@/db/schema";
 import {
+  AUTHORED_REQ_STATUSES,
   EMPLOYMENT_TYPES,
   PRIORITIES,
-  REQ_STATUSES,
   SENIORITIES,
+  WORK_AUTHORIZATIONS,
   WORK_MODES,
 } from "@/lib/domain";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormModal } from "./form-shell";
 import { createRequisition, updateRequisition } from "@/server/actions/requisitions";
 
@@ -238,7 +239,7 @@ export function RequisitionFormModal({
             </Field>
             <Field label="Status" error={errors.status}>
               <Select name="status" defaultValue={requisition?.status ?? "open"}>
-                {REQ_STATUSES.map((p) => (
+                {AUTHORED_REQ_STATUSES.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
                   </option>
@@ -256,14 +257,44 @@ export function RequisitionFormModal({
 
           <Field
             label="Must-have skills"
-            hint="Comma separated. These are highlighted on matching candidate profiles."
-            error={errors.skills}
+            hint="Comma separated. A candidate without these is not submittable."
+            error={errors.requiredSkills}
           >
             <Input
-              name="skills"
-              defaultValue={(requisition?.skills ?? []).join(", ")}
-              placeholder="Go, PostgreSQL, Kafka, AWS"
+              name="requiredSkills"
+              defaultValue={(requisition?.requiredSkills ?? []).join(", ")}
+              placeholder="Oracle EBS, PL/SQL, Oracle Fusion"
             />
+          </Field>
+
+          <Field
+            label="Nice-to-have skills"
+            hint="Comma separated. These raise a match score but never rule anyone out."
+            error={errors.preferredSkills}
+          >
+            <Input
+              name="preferredSkills"
+              defaultValue={(requisition?.preferredSkills ?? []).join(", ")}
+              placeholder="OIC, SOA Suite, Kubernetes"
+            />
+          </Field>
+
+          <Field
+            label="Accepted work authorization"
+            hint="Leave every box clear if the client has set no constraint."
+            error={errors.visaRequirements}
+          >
+            <div className="grid gap-x-4 gap-y-2 sm:grid-cols-3">
+              {WORK_AUTHORIZATIONS.map((w) => (
+                <Checkbox
+                  key={w.value}
+                  name="visaRequirements"
+                  value={w.value}
+                  defaultChecked={(requisition?.visaRequirements ?? []).includes(w.value)}
+                  label={w.label}
+                />
+              ))}
+            </div>
           </Field>
 
           <Field label="Role summary" error={errors.description}>

@@ -30,9 +30,16 @@ redaction. Platform and integrity (0.4–0.7): Postgres, structured change histo
 delete with recovery, and optimistic concurrency. 64 tests cover the permission matrix and
 the integrity rules.
 
-The remaining gaps concentrate in three places: **AI** (nothing yet), **staffing-specific
-domain fields** (W2/C2C, visa, rate, client review), and **module completion** (resume
-upload and parsing, notifications, the audit viewer, settings, exports).
+**Phase 1's breaking half is complete** (1.1, 1.2, 1.4–1.7): eleven pipeline stages, ten
+requirement statuses with the four progress ones derived rather than stored, W-2 and
+corp-to-corp engagements, per-client visa policy matched against candidate work
+authorization, and required-versus-preferred skills. 88 tests now cover the permission
+matrix, the integrity rules and the domain vocabulary.
+
+The remaining gaps concentrate in three places: **AI** (nothing yet), **the additive
+domain fields** (candidate rate and availability, interview timezone, configurable
+scorecards), and **module completion** (resume upload and parsing, notifications, the
+audit viewer, settings, exports).
 
 ---
 
@@ -59,18 +66,25 @@ far cheaper now than after another dozen features land on the tables.
 
 ## 3. Phase 1 — Domain model alignment
 
-The spec's vocabulary is a staffing-agency model; the build currently uses an in-house
-corporate model. These are breaking data migrations.
+The spec's vocabulary is a staffing-agency model; the build used an in-house corporate
+model. **The breaking half is done** (1.1, 1.2, 1.4–1.7): stages, statuses, engagement
+types, visa and the skills split, with the seed rewritten around them. What remains
+(1.3, 1.8–1.12) is additive and does not block anything else.
+
+> **Answered while doing this work.** The build now reads as a **staffing agency**: clients,
+> W-2 / corp-to-corp, Client Review, bill rates and per-client visa policy. That was the
+> reading the specification supports, and it is what settled 1.4 and 1.5. Single-company
+> for now — multi-tenancy (§23) is still unaddressed and remains a Phase 5 question.
 
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
-| 1.1 | **Pipeline stages 6 → 11** | §8 | 🟡 | M | Built: `sourced, screening, submitted, interview, offer, hired`. Spec adds Qualified, Client Review, splits Interview into Scheduled/Completed, adds Feedback Pending, Selected, Joined. Needs a mapping migration for ~4,400 existing stage events. |
-| 1.2 | **Terminal states incl. On Hold** | §8 | 🟡 | S | Rejected and Withdrawn exist as stages; On Hold exists only as a submission *status*. Reconcile. |
+| 1.1 | **Pipeline stages 6 → 11** | §8 | ✅ | M | Done — New, Screening, Qualified, Submitted, Client Review, Interview Scheduled, Interview Completed, Feedback Pending, Selected, Offer, Joined. The three interview-band stages are **recomputed** from the interviews and scorecards on every change (`syncInterviewStage`), so Feedback Pending always means a scorecard is genuinely owed. Existing databases upgrade with `scripts/migrate-vocabulary-v2.sql`, verified against the 1,370-submission dataset before the reseed. |
+| 1.2 | **Terminal states incl. On Hold** | §8 | ✅ | S | Done — On Hold joins Rejected and Withdrawn as a terminal stage, with its own action rather than being folded into close-out: no rejection reason, and reversible. Reopening reads the stage the candidate left back off the stage history, so parking someone does not cost them their place. `reopenSubmission` finally has a UI. |
 | 1.3 | **Configurable pipeline stages** | §8 | ❌ | L | Stages are a compile-time constant in `src/lib/domain.ts`. Making them admin-editable means moving them to a table and reworking every badge, board column and funnel query that reads the constant. |
-| 1.4 | **Requirement statuses 6 → 10** | §5 | 🟡 | S | Missing Active Sourcing, Candidate Submitted, Interviewing, Offer. Decide whether these are authored or *derived* from pipeline state — deriving avoids a second source of truth. |
-| 1.5 | **Staffing employment types** | §5 | 🟡 | S | Built: full_time, contract, contract_to_hire, part_time, intern. Missing **W2** and **C2C**. |
-| 1.6 | **Visa requirements on requirements** | §5 | ❌ | S | Candidates have `workAuthorization`; requirements have no counterpart to match against. |
-| 1.7 | **Preferred vs required skills** | §5 | 🟡 | S | One `skills` array today. Splitting it is a prerequisite for honest match scoring (3.2). |
+| 1.4 | **Requirement statuses 6 → 10** | §5 | ✅ | S | Done, **derived**. The four progress statuses are computed from the pipeline (`requisitionProgress`) and never stored; the status menu and the form offer only the six a person decides. Filtering by a derived status is applied after the count aggregate, which is where the numbers already exist. |
+| 1.5 | **Staffing employment types** | §5 | ✅ | S | Done — W-2 and corp-to-corp are separate values, not a note on "contract", because they decide who employs the person and how the rate is quoted. `isRateBased()` replaces the `startsWith("contract")` test that drove bill rates. |
+| 1.6 | **Visa requirements on requirements** | §5 | ✅ | S | Done — `requisitions.visaRequirements` lists what the client accepts, drawn from the same vocabulary a candidate holds, so matching is set membership rather than free text. Empty means no constraint, not "none accepted". The board shows each candidate's authorization and flags mismatches. Codes expanded to the staffing set (Citizen, Green Card, H-1B, EAD, OPT/CPT, TN, Needs sponsorship). |
+| 1.7 | **Preferred vs required skills** | §5 | ✅ | S | Done — `requiredSkills` / `preferredSkills` on requisitions, both on the form and the brief. Unblocks honest match scoring (3.2). |
 | 1.8 | **Backup recruiter, source, attachments** | §5 | ❌ | S | |
 | 1.9 | **Candidate: primary technology, availability, rate, education, structured experience** | §6, §7 | 🟡 | M | Current columns stop at `expectedSalary` / `noticePeriodDays`. Education and experience need their own tables for the Candidate 360 sections. |
 | 1.10 | **Interview: start/end time, timezone, Confirmed status** | §10 | 🟡 | M | Today: `scheduledAt` + `durationMinutes`, no timezone. `users.timezone` is stored but never used for display — a distributed panel currently reads times in the viewer's locale with no indication of whose zone it is. |
@@ -141,7 +155,7 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 
 | # | Item | Status | Size | Notes |
 |---|---|---|---|---|
-| 5.1 | **Automated tests** | 🟡 | L | Vitest with 64 tests covering the permission matrix and the integrity rules (`npm test`). Still missing, and the highest-value remaining targets, are the action-layer business rules: the offer state machine, the hire cascade (offer accepted → submission → candidate → requisition seat count), and stage backfill. These are exactly the rules that break silently. |
+| 5.1 | **Automated tests** | 🟡 | L | Vitest with 88 tests covering the permission matrix, the integrity rules and the domain vocabulary (`npm test`). Still missing, and the highest-value remaining targets, are the action-layer business rules: the offer state machine, the hire cascade (offer accepted → submission → candidate → requisition seat count), and stage backfill. These are exactly the rules that break silently. |
 | 5.2 | **Query performance** | 🟡 | M | Several reads load a full table then filter in TypeScript: `getOffer()` calls `listOffers()` and `.find()`; `getTeamMember()` computes `teamOverview()` for every user to return one; three pages call `listRequisitions({status:"all"})` to look up a single row; candidate pagination slices in JS after loading all matches. Correct and fast at current volumes, wrong shape at 100k candidates. |
 | 5.3 | **Keyboard-accessible pipeline** | 🟡 | S | The board wires `PointerSensor` only. dnd-kit's `KeyboardSensor` would make dragging keyboard-operable. A keyboard path does exist today (each card's "Move stage…" menu), so this is a gap, not a blocker. |
 | 5.4 | **PII handling: encryption at rest, retention, erasure** | ❌ | M | Recruiting data attracts GDPR/CCPA subject-access and deletion requests. Retention policy and a real erasure path (distinct from soft delete) are a legal requirement, not a nice-to-have. |

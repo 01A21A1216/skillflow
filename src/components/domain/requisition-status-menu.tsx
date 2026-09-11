@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 
-import { REQ_STATUSES, REQ_STATUS, type ReqStatus } from "@/lib/domain";
+import { AUTHORED_REQ_STATUSES, REQ_STATUS, type ReqStatus } from "@/lib/domain";
 import { changeRequisitionStatus } from "@/server/actions/requisitions";
 import { Button } from "@/components/ui/button";
 import { Field, Select, Textarea } from "@/components/ui/field";
@@ -12,15 +12,25 @@ import { Menu, MenuItem, MenuLabel } from "@/components/ui/misc";
 import { Dot } from "@/components/ui/badge";
 import { FormModal } from "./forms/form-shell";
 
+/**
+ * `current` is the authored status stored on the row — the only thing this menu
+ * can change. `display` is what the requirement actually reads as, which for an
+ * open requisition is derived from its pipeline (Interviewing, Offer, …). The
+ * two are shown separately so nobody tries to "set" a status the board owns.
+ */
 export function RequisitionStatusMenu({
   requisitionId,
   current,
+  display,
 }: {
   requisitionId: string;
   current: string;
+  display?: string;
 }) {
   const router = useRouter();
   const [target, setTarget] = useState<ReqStatus | null>(null);
+  const shown = display ?? current;
+  const derived = shown !== current;
 
   return (
     <>
@@ -28,15 +38,19 @@ export function RequisitionStatusMenu({
         align="right"
         trigger={
           <Button variant="secondary" size="sm">
-            {REQ_STATUS[current as ReqStatus]?.label ?? current}
+            {REQ_STATUS[shown as ReqStatus]?.label ?? shown}
             <ChevronDown className="size-3.5" />
           </Button>
         }
       >
         {(close) => (
           <>
-            <MenuLabel>Change status</MenuLabel>
-            {REQ_STATUSES.map((s) => (
+            <MenuLabel>
+              {derived
+                ? `Reading as ${REQ_STATUS[shown as ReqStatus]?.label} from the pipeline`
+                : "Change status"}
+            </MenuLabel>
+            {AUTHORED_REQ_STATUSES.map((s) => (
               <MenuItem
                 key={s.value}
                 icon={<Dot tone={s.tone} />}
@@ -73,7 +87,7 @@ export function RequisitionStatusMenu({
             <input type="hidden" name="requisitionId" value={requisitionId} />
             <Field label="New status" error={errors.status}>
               <Select name="status" defaultValue={target ?? current}>
-                {REQ_STATUSES.map((s) => (
+                {AUTHORED_REQ_STATUSES.map((s) => (
                   <option key={s.value} value={s.value} disabled={s.value === current}>
                     {s.label}
                   </option>

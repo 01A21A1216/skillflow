@@ -20,10 +20,10 @@ import { Table, TableShell, Td, Th, Tr } from "@/components/ui/table";
 import {
   EMPLOYMENT_TYPES,
   PRIORITIES,
+  PROGRESS_BUCKETS,
   REQ_STATUSES,
-  STAGE,
   WORK_MODES,
-  type Stage,
+  bucketStages,
 } from "@/lib/domain";
 import { cn, formatDate, formatRange, pluralize } from "@/lib/utils";
 import {
@@ -56,8 +56,6 @@ const HEALTH_OPTIONS = [
   { value: "at_risk", label: "At risk" },
   { value: "stalled", label: "Stalled" },
 ];
-
-const PIPELINE_STAGE_ORDER: Stage[] = ["sourced", "screening", "submitted", "interview", "offer"];
 
 export default async function RequisitionsPage({
   searchParams,
@@ -192,7 +190,7 @@ export default async function RequisitionsPage({
               <tbody>
                 {rows.map((r) => {
                   const health = requisitionHealth(r);
-                  const stages = breakdown.get(r.id) ?? ({} as Record<Stage, number>);
+                  const stages = breakdown.get(r.id);
                   const overdue = r.daysToTarget !== null && r.daysToTarget < 0;
 
                   return (
@@ -203,7 +201,7 @@ export default async function RequisitionsPage({
                             <span className="font-mono text-[11px] text-content-subtle">
                               {r.code}
                             </span>
-                            <ReqStatusBadge value={r.status} />
+                            <ReqStatusBadge value={r.displayStatus} />
                             <PriorityBadge value={r.priority} dot />
                           </div>
                           <p className="mt-1 text-[13.5px] font-medium text-content group-hover:text-brand">
@@ -218,7 +216,7 @@ export default async function RequisitionsPage({
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             <WorkModeBadge value={r.workMode} />
                             <EmploymentBadge value={r.employmentType} />
-                            <SkillChips skills={r.skills} max={3} />
+                            <SkillChips skills={r.requiredSkills} max={3} />
                           </div>
                         </Link>
                       </Td>
@@ -242,10 +240,10 @@ export default async function RequisitionsPage({
                           </div>
                           <SegmentBar
                             height={6}
-                            segments={PIPELINE_STAGE_ORDER.map((s) => ({
-                              label: STAGE[s].label,
-                              value: stages[s] ?? 0,
-                              tone: STAGE[s].tone,
+                            segments={PROGRESS_BUCKETS.map((b) => ({
+                              label: b.label,
+                              value: bucketStages(stages)[b.key],
+                              tone: b.tone,
                             }))}
                           />
                           <p className="mt-1.5 text-[11.5px] text-content-subtle tabular-nums">

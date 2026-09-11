@@ -1,5 +1,5 @@
 {
-  "id": "e603e36e-551f-46ff-b930-5cc7503cc3b2",
+  "id": "a4514f34-c1bb-4acd-8efa-0a462a311f0d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1757,8 +1757,22 @@
           "notNull": true,
           "default": 10
         },
-        "skills": {
-          "name": "skills",
+        "required_skills": {
+          "name": "required_skills",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "preferred_skills": {
+          "name": "preferred_skills",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "visa_requirements": {
+          "name": "visa_requirements",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true,
@@ -2347,7 +2361,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'sourced'"
+          "default": "'new'"
         },
         "status": {
           "name": "status",

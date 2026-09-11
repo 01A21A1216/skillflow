@@ -15,7 +15,17 @@ import {
   submissions,
   users,
 } from "@/db/schema";
-import { ACTIVE_STAGES, PRIORITY_WEIGHT, type Priority, type Stage } from "@/lib/domain";
+import {
+  ACTIVE_STAGES,
+  EMPTY_STAGE_COUNTS,
+  PRIORITY_WEIGHT,
+  progressBucket,
+  requisitionProgress,
+  type Priority,
+  type ReqStatus,
+  type StageCounts,
+  type Stage,
+} from "@/lib/domain";
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { requisitionScope, visibleRequisitionIds } from "@/server/authz";
@@ -37,7 +47,14 @@ export interface RequisitionRow {
   id: string;
   code: string;
   title: string;
+  /** The authored status stored on the row — the only one a person can set. */
   status: string;
+  /**
+   * What the requirement actually reads as: the authored status, unless it is
+   * open, in which case the pipeline says whether it is Active Sourcing,
+   * Candidate Submitted, Interviewing or at Offer (§5).
+   */
+  displayStatus: ReqStatus;
   priority: string;
   department: string;
   location: string;
@@ -59,7 +76,9 @@ export interface RequisitionRow {
   recruiterName: string;
   hiringManagerId: string;
   hiringManagerName: string;
-  skills: string[];
+  requiredSkills: string[];
+  preferredSkills: string[];
+  visaRequirements: string[];
   /** Derived pipeline counts. */
   activeCount: number;
   submittedCount: number;
@@ -72,6 +91,8 @@ export interface RequisitionRow {
 }
 
 const ACTIVE_SET = ACTIVE_STAGES as readonly string[];
+
+const DERIVED_STATUSES: string[] = ["active_sourcing", "candidate_submitted", "interviewing", "offer"];
 
 /**
  * One pass over submissions, grouped by requisition. Small enough dataset
@@ -89,21 +110,22 @@ async function pipelineCounts() {
     .groupBy(submissions.requisitionId, submissions.stage, submissions.status)
     );
 
-  const map = new Map<
-    string,
-    { active: number; submitted: number; interview: number; offer: number; hired: number; total: number }
-  >();
+  interface Counts extends StageCounts {
+    active: number;
+    hired: number;
+    total: number;
+  }
+  const blank = (): Counts => ({ ...EMPTY_STAGE_COUNTS, active: 0, hired: 0, total: 0 });
+  const map = new Map<string, Counts>();
 
   for (const r of rows) {
-    const entry =
-      map.get(r.requisitionId) ??
-      { active: 0, submitted: 0, interview: 0, offer: 0, hired: 0, total: 0 };
+    const entry = map.get(r.requisitionId) ?? blank();
     entry.total += r.count;
     if (r.status === "active" && ACTIVE_SET.includes(r.stage)) {
       entry.active += r.count;
-      if (r.stage === "submitted") entry.submitted += r.count;
-      if (r.stage === "interview") entry.interview += r.count;
-      if (r.stage === "offer") entry.offer += r.count;
+      // Eleven stages collapse into the four the requirement card reports on.
+      const bucket = progressBucket(r.stage as Stage);
+      if (bucket) entry[bucket] += r.count;
     }
     if (r.status === "hired") entry.hired += r.count;
     map.set(r.requisitionId, entry);
@@ -137,12 +159,20 @@ export async function listRequisitions(
       ),
     );
   }
-  if (filters.status && filters.status !== "all") {
+  // The four derived statuses are not columns, so they cannot be filtered in
+  // SQL — they are applied against `displayStatus` once the counts are in.
+  const derivedStatusFilter = DERIVED_STATUSES.includes(filters.status ?? "")
+    ? (filters.status as ReqStatus)
+    : null;
+  if (filters.status && filters.status !== "all" && !derivedStatusFilter) {
     if (filters.status === "active") {
       conditions.push(inArray(requisitions.status, ["open", "on_hold", "draft"]));
     } else {
       conditions.push(eq(requisitions.status, filters.status));
     }
+  } else if (derivedStatusFilter) {
+    // Every derived status belongs to an open requirement.
+    conditions.push(eq(requisitions.status, "open"));
   }
   if (filters.priority && filters.priority !== "all")
     conditions.push(eq(requisitions.priority, filters.priority));
@@ -175,12 +205,18 @@ export async function listRequisitions(
   const counts = await pipelineCounts();
 
   let result: RequisitionRow[] = rows.map(({ req, clientName, clientTier, recruiterName, hiringManagerName }) => {
-    const c = counts.get(req.id) ?? { active: 0, submitted: 0, interview: 0, offer: 0, hired: 0, total: 0 };
+    const c = counts.get(req.id) ?? {
+      ...EMPTY_STAGE_COUNTS,
+      active: 0,
+      hired: 0,
+      total: 0,
+    };
     return {
       id: req.id,
       code: req.code,
       title: req.title,
       status: req.status,
+      displayStatus: requisitionProgress(req.status, c),
       priority: req.priority,
       department: req.department,
       location: req.location,
@@ -202,10 +238,12 @@ export async function listRequisitions(
       recruiterName,
       hiringManagerId: req.hiringManagerId,
       hiringManagerName,
-      skills: req.skills ?? [],
+      requiredSkills: req.requiredSkills ?? [],
+      preferredSkills: req.preferredSkills ?? [],
+      visaRequirements: req.visaRequirements ?? [],
       activeCount: c.active,
       submittedCount: c.submitted,
-      interviewCount: c.interview,
+      interviewCount: c.interviewing,
       offerCount: c.offer,
       hiredCount: c.hired,
       totalCount: c.total,
@@ -213,6 +251,10 @@ export async function listRequisitions(
       daysToTarget: req.targetFillDate ? -daysBetween(req.targetFillDate) : null,
     };
   });
+
+  if (derivedStatusFilter) {
+    result = result.filter((r) => r.displayStatus === derivedStatusFilter);
+  }
 
   if (filters.health && filters.health !== "all") {
     result = result.filter((r) => requisitionHealth(r).key === filters.health);

@@ -7,7 +7,7 @@ import { Table2, BarChart3 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-export { SERIES, ORDINAL, GRID, AXIS, SURFACE } from "./palette";
+export { SERIES, ORDINAL, GRID, AXIS, SURFACE, ordinalStep } from "./palette";
 
 import { AXIS as AXIS_TOKEN, FALLBACK, SURFACE as SURFACE_TOKEN } from "./palette";
 

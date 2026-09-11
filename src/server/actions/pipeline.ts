@@ -1,13 +1,19 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { candidates, notes, requisitions, stageEvents, submissions } from "@/db/schema";
 import type { User } from "@/db/schema";
-import { STAGE, stageIndex, type Stage } from "@/lib/domain";
-import { addToPipelineSchema, moveStageSchema, rejectSchema, reopenSchema } from "@/lib/validation";
+import { STAGE, STAGE_ORDER, atOrPast, stageIndex, type Stage } from "@/lib/domain";
+import {
+  addToPipelineSchema,
+  holdSchema,
+  moveStageSchema,
+  rejectSchema,
+  reopenSchema,
+} from "@/lib/validation";
 import { canTouchRequisition } from "@/server/authz";
 import { stamp, stampNew } from "@/server/integrity";
 import {
@@ -43,6 +49,8 @@ async function syncRequisitionFill(requisitionId: string) {
 
   const filled = Math.min(hires, req.openings);
   const shouldClose = hires >= req.openings;
+  // Only an authored status may be overwritten here; the four derived ones are
+  // never stored, so there is nothing on the row to collide with.
   const isOpenish = ["open", "on_hold", "draft"].includes(req.status);
 
   (await db.update(requisitions)
@@ -54,6 +62,18 @@ async function syncRequisitionFill(requisitionId: string) {
     })
     .where(eq(requisitions.id, requisitionId))
     );
+}
+
+/** The last live stage a submission held before it was parked or closed out. */
+async function lastLiveStage(submissionId: string, fallback: string) {
+  const events = await db
+    .select({ toStage: stageEvents.toStage })
+    .from(stageEvents)
+    .where(eq(stageEvents.submissionId, submissionId))
+    .orderBy(desc(stageEvents.createdAt));
+
+  const live = events.find((e) => stageIndex(e.toStage as Stage) >= 0);
+  return (live?.toStage ?? fallback) as Stage;
 }
 
 async function addToPipelineImpl(actor: User, formData: FormData): Promise<ActionState> {
@@ -95,7 +115,7 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
         status: "active",
         ownerId: req.leadRecruiterId,
         matchScore: input.matchScore,
-        submittedAt: stageIndex(stage) >= 2 ? now : null,
+        submittedAt: atOrPast(stage, "submitted") ? now : null,
         stageSince: now,
         ...stampNew(actor.id),
       })
@@ -103,13 +123,13 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
 
     // Backfill the stages this candidate is being dropped past, so funnel
     // analytics and the timeline stay consistent.
-    const path = ["sourced", "screening", "submitted", "interview", "offer"] as Stage[];
-    for (const s of path.slice(0, stageIndex(stage) + 1)) {
+    const path = STAGE_ORDER.slice(0, stageIndex(stage) + 1);
+    for (const [i, s] of path.entries()) {
       (await tx.insert(stageEvents)
         .values({
           id: newId("stg"),
           submissionId: id,
-          fromStage: s === "sourced" ? null : path[path.indexOf(s) - 1]!,
+          fromStage: i === 0 ? null : path[i - 1]!,
           toStage: s,
           actorId: actor.id,
           note: s === stage ? (input.note ?? null) : null,
@@ -174,7 +194,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   }
 
   const target = stage as Stage;
-  const hiring = target === "hired";
+  const hiring = target === "joined";
   const now = new Date();
 
   db.transaction(async (tx) => {
@@ -186,7 +206,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
         rejectionReason: null,
         rejectedAt: null,
         submittedAt:
-          stageIndex(target) >= 2 && !submission.submittedAt ? now : submission.submittedAt,
+          atOrPast(target, "submitted") && !submission.submittedAt ? now : submission.submittedAt,
         ...stamp(actor.id, submission.rowVersion + 1),
       })
       .where(eq(submissions.id, submissionId))
@@ -220,7 +240,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
     type: "stage_changed",
     actorId: actor.id,
     summary: hiring
-      ? `${candidate.firstName} ${candidate.lastName} hired for ${requisition.title}`
+      ? `${candidate.firstName} ${candidate.lastName} joined ${requisition.title}`
       : `${candidate.firstName} ${candidate.lastName} moved to ${STAGE[target].label} on ${requisition.code}`,
     changes: [{ field: "stage", label: "Stage", from: submission.stage, to: target }],
     meta: { requisitionId: requisition.id, candidateId: candidate.id, from: submission.stage, to: target },
@@ -229,7 +249,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   revalidateEverywhere(requisition.id, candidate.id);
   return succeed(
     hiring
-      ? `${candidate.firstName} marked as hired`
+      ? `${candidate.firstName} marked as joined`
       : `Moved to ${STAGE[target].label}`,
   );
 }
@@ -312,6 +332,72 @@ async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<Ac
   return succeed(outcome === "withdrawn" ? "Marked as withdrawn" : "Candidate closed out");
 }
 
+/**
+ * Park a candidate without closing them out (§8).
+ *
+ * Unlike a rejection this carries no reason and stays reversible: the stage
+ * event records where they were, so `reopenSubmission` can put them back.
+ */
+async function holdSubmissionImpl(actor: User, formData: FormData): Promise<ActionState> {
+  const parsed = parseForm(holdSchema, formData);
+  if (!parsed.success) return parsed.state;
+  const { submissionId, note } = parsed.data;
+
+  const row = (await db
+    .select({ submission: submissions, candidate: candidates, requisition: requisitions })
+    .from(submissions)
+    .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
+    .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
+    .where(eq(submissions.id, submissionId))
+    )[0];
+
+  if (!row) return fail("That submission no longer exists.");
+  const { submission, candidate, requisition } = row;
+  if (submission.status !== "active") return fail("This candidate is not active.");
+
+  const now = new Date();
+
+  db.transaction(async (tx) => {
+    (await tx.update(submissions)
+      .set({
+        stage: "on_hold",
+        status: "on_hold",
+        stageSince: now,
+        ...stamp(actor.id, submission.rowVersion + 1),
+      })
+      .where(eq(submissions.id, submissionId))
+      );
+
+    (await tx.insert(stageEvents)
+      .values({
+        id: newId("stg"),
+        submissionId,
+        fromStage: submission.stage,
+        toStage: "on_hold",
+        actorId: actor.id,
+        note: note ?? "Put on hold",
+        createdAt: now,
+      })
+      );
+  });
+
+  await logActivity({
+    entityType: "submission",
+    entityId: submissionId,
+    type: "stage_changed",
+    actorId: actor.id,
+    summary: `${candidate.firstName} ${candidate.lastName} put on hold for ${requisition.code}`,
+    changes: [
+      { field: "stage", label: "Stage", from: submission.stage, to: "on_hold" },
+      { field: "status", label: "Status", from: submission.status, to: "on_hold" },
+    ],
+    meta: { requisitionId: requisition.id, candidateId: candidate.id },
+  });
+
+  revalidateEverywhere(requisition.id, candidate.id);
+  return succeed("Candidate put on hold");
+}
+
 async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<ActionState> {
   const parsed = parseForm(reopenSchema, formData);
   if (!parsed.success) return parsed.state;
@@ -332,10 +418,15 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
   const now = new Date();
   const wasHired = submission.status === "hired";
 
+  // A held candidate resumes where they stopped rather than restarting at
+  // Screening, so parking someone does not cost them their pipeline position.
+  const resumeAt =
+    submission.status === "on_hold" ? await lastLiveStage(submissionId, stage) : stage;
+
   db.transaction(async (tx) => {
     (await tx.update(submissions)
       .set({
-        stage,
+        stage: resumeAt,
         status: "active",
         rejectionReason: null,
         rejectedAt: null,
@@ -350,7 +441,7 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
         id: newId("stg"),
         submissionId,
         fromStage: submission.stage,
-        toStage: stage,
+        toStage: resumeAt,
         actorId: actor.id,
         note: "Reopened",
         createdAt: now,
@@ -387,6 +478,7 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
 export const addToPipeline = guarded("submission.create", addToPipelineImpl);
 export const moveStage = guarded("submission.move", moveStageImpl);
 export const rejectSubmission = guarded("submission.close", rejectSubmissionImpl);
+export const holdSubmission = guarded("submission.move", holdSubmissionImpl);
 export const reopenSubmission = guarded("submission.move", reopenSubmissionImpl);
 
 /**

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  AUTHORED_REQ_STATUSES,
   CANDIDATE_STATUSES,
   DECLINE_REASONS,
   EMPLOYMENT_TYPES,
@@ -11,9 +12,9 @@ import {
   PRIORITIES,
   RECOMMENDATIONS,
   REJECTION_REASONS,
-  REQ_STATUSES,
   SENIORITIES,
   SOURCES,
+  WORK_AUTHORIZATIONS,
   WORK_MODES,
 } from "./domain";
 
@@ -63,14 +64,18 @@ export const requisitionSchema = z
     workMode: z.enum(values(WORK_MODES)),
     seniority: z.enum(values(SENIORITIES)),
     priority: z.enum(values(PRIORITIES)),
-    status: z.enum(values(REQ_STATUSES)).default("open"),
+    // Only the six authored statuses are settable; the other four are read
+    // off the pipeline and would be overwritten on the next card move.
+    status: z.enum(values(AUTHORED_REQ_STATUSES)).default("open"),
     location: nonEmpty("Location", 120),
     openings: z.coerce.number().int().min(1).max(50),
     minSalary: money.optional(),
     maxSalary: money.optional(),
     experienceMin: z.coerce.number().int().min(0).max(40).default(0),
     experienceMax: z.coerce.number().int().min(0).max(40).default(10),
-    skills: listField,
+    requiredSkills: listField,
+    preferredSkills: listField,
+    visaRequirements: z.array(z.enum(values(WORK_AUTHORIZATIONS))).default([]),
     requirements: listField,
     description: optionalText(),
     targetFillDate: z
@@ -90,7 +95,7 @@ export const requisitionSchema = z
 
 export const requisitionStatusSchema = z.object({
   requisitionId: nonEmpty("Requisition"),
-  status: z.enum(values(REQ_STATUSES)),
+  status: z.enum(values(AUTHORED_REQ_STATUSES)),
   reason: optionalText(500),
 });
 
@@ -115,7 +120,7 @@ export const candidateSchema = z.object({
   expectedSalary: money.optional(),
   currentSalary: money.optional(),
   noticePeriodDays: z.coerce.number().int().min(0).max(180).default(14),
-  workAuthorization: z.enum(["citizen", "permanent_resident", "visa_holder", "requires_sponsorship"]),
+  workAuthorization: z.enum(values(WORK_AUTHORIZATIONS)),
   willingToRelocate: z.coerce.boolean().default(false),
   linkedinUrl: z
     .string()
@@ -136,7 +141,7 @@ export const candidateSchema = z.object({
 export const addToPipelineSchema = z.object({
   candidateId: nonEmpty("Candidate"),
   requisitionId: nonEmpty("Requisition"),
-  stage: z.enum(values(PIPELINE_STAGES)).default("sourced"),
+  stage: z.enum(values(PIPELINE_STAGES)).default("new"),
   matchScore: z.coerce.number().int().min(0).max(100).default(70),
   note: optionalText(1000),
 });
@@ -151,6 +156,16 @@ export const rejectSchema = z.object({
   submissionId: nonEmpty("Submission"),
   outcome: z.enum(["rejected", "withdrawn"]),
   reason: z.enum(REJECTION_REASONS as unknown as [string, ...string[]]),
+  note: optionalText(1000),
+});
+
+/**
+ * On Hold is a terminal *state* but not a closure: the candidate is parked and
+ * expected back, so it is reversible through `reopenSubmission` and does not
+ * ask for a rejection reason.
+ */
+export const holdSchema = z.object({
+  submissionId: nonEmpty("Submission"),
   note: optionalText(1000),
 });
 

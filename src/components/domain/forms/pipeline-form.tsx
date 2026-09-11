@@ -72,7 +72,7 @@ export function AddToPipelineButton({
               hint="Earlier stages are backfilled so funnel analytics stay accurate."
               error={errors.stage}
             >
-              <Select name="stage" defaultValue="sourced">
+              <Select name="stage" defaultValue="new">
                 {PIPELINE_STAGES.map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}

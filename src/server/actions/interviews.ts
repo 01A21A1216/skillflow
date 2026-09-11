@@ -15,7 +15,13 @@ import {
   users,
 } from "@/db/schema";
 import type { User } from "@/db/schema";
-import { INTERVIEW_TYPE, type InterviewType } from "@/lib/domain";
+import {
+  INTERVIEW_STAGES,
+  INTERVIEW_TYPE,
+  atOrPast,
+  type InterviewType,
+  type Stage,
+} from "@/lib/domain";
 import { feedbackSchema, interviewOutcomeSchema, interviewSchema } from "@/lib/validation";
 import { can, canTouchRequisition } from "@/server/authz";
 import {
@@ -28,6 +34,66 @@ import {
   succeed,
   type ActionState,
 } from "./shared";
+
+/**
+ * Keep the three interview-band stages honest (§8).
+ *
+ * Interview Scheduled / Interview Completed / Feedback Pending are not three
+ * things a recruiter remembers to click — they are three readings of the same
+ * underlying facts, so they are recomputed from the interviews and scorecards
+ * whenever either changes. A submission outside the band (still screening, or
+ * already selected) is left alone: this never moves anyone forwards or back
+ * past a decision a person made.
+ */
+async function syncInterviewStage(submissionId: string, actorId: string) {
+  const current = (await db.select().from(submissions).where(eq(submissions.id, submissionId)))[0];
+  if (!current) return;
+  if (current.status !== "active") return;
+  if (!INTERVIEW_STAGES.includes(current.stage as Stage)) return;
+
+  const rounds = await db
+    .select({
+      id: interviews.id,
+      status: interviews.status,
+      scheduledAt: interviews.scheduledAt,
+      panelSize: sql<number>`(select count(*)::int from interview_panel p where p.interview_id = ${interviews.id})`,
+      feedbackCount: sql<number>`(select count(*)::int from feedback f where f.interview_id = ${interviews.id})`,
+    })
+    .from(interviews)
+    .where(eq(interviews.submissionId, submissionId));
+
+  const live = rounds.filter((r) => r.status !== "cancelled");
+  if (live.length === 0) return;
+
+  const awaiting = live.some((r) => r.status === "scheduled" && r.scheduledAt.getTime() > Date.now());
+  const owing = live.some((r) => r.status === "completed" && r.feedbackCount < r.panelSize);
+
+  const next: Stage = awaiting
+    ? "interview_scheduled"
+    : owing
+      ? "feedback_pending"
+      : "interview_completed";
+
+  if (next === current.stage) return;
+
+  const now = new Date();
+  (await db.update(submissions)
+    .set({ stage: next, stageSince: now, updatedAt: now })
+    .where(eq(submissions.id, submissionId))
+    );
+
+  (await db.insert(stageEvents)
+    .values({
+      id: newId("stg"),
+      submissionId,
+      fromStage: current.stage,
+      toStage: next,
+      actorId,
+      note: "Followed the interview schedule",
+      createdAt: now,
+    })
+    );
+}
 
 async function context(submissionId: string) {
   return (await db
@@ -97,10 +163,12 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
         );
     }
 
-    // Scheduling a loop moves the candidate into the interview stage.
-    if (["sourced", "screening", "submitted"].includes(ctx.submission.stage)) {
+    // Booking a round moves the candidate to Interview Scheduled, but never
+    // drags anyone backwards — someone already at Selected or Offer who picks up
+    // an extra round keeps the stage they earned.
+    if (!atOrPast(ctx.submission.stage as Stage, "interview_scheduled")) {
       (await tx.update(submissions)
-        .set({ stage: "interview", stageSince: now, updatedAt: now })
+        .set({ stage: "interview_scheduled", stageSince: now, updatedAt: now })
         .where(eq(submissions.id, input.submissionId))
         );
 
@@ -109,7 +177,7 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
           id: newId("stg"),
           submissionId: input.submissionId,
           fromStage: ctx.submission.stage,
-          toStage: "interview",
+          toStage: "interview_scheduled",
           actorId: actor.id,
           note: `Advanced when ${input.title} was scheduled`,
           createdAt: now,
@@ -165,6 +233,8 @@ async function updateInterviewOutcomeImpl(actor: User, formData: FormData): Prom
     summary: `${interview.title} marked ${status.replace("_", " ")} for ${ctx.candidate.firstName} ${ctx.candidate.lastName}`,
     meta: { requisitionId: ctx.requisition.id, candidateId: ctx.candidate.id, interviewId },
   });
+
+  await syncInterviewStage(interview.submissionId, actor.id);
 
   revalidatePath("/interviews");
   revalidatePath("/");
@@ -293,6 +363,8 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
       recommendation: input.recommendation,
     },
   });
+
+  await syncInterviewStage(interview.submissionId, actor.id);
 
   revalidatePath("/interviews");
   revalidatePath("/");

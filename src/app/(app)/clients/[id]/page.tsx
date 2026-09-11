@@ -16,7 +16,7 @@ import { Avatar, UserChip } from "@/components/ui/avatar";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SegmentBar } from "@/components/ui/misc";
-import { STAGE, type Stage } from "@/lib/domain";
+import { PROGRESS_BUCKETS, bucketStages } from "@/lib/domain";
 import { formatDate, formatRange, pluralize } from "@/lib/utils";
 import { getClient } from "@/server/queries/people";
 import {
@@ -37,8 +37,6 @@ export async function generateMetadata({
   const detail = await getClient(id);
   return { title: detail?.client.name ?? "Client" };
 }
-
-const STAGES: Stage[] = ["sourced", "screening", "submitted", "interview", "offer"];
 
 export default async function ClientDetailPage({
   params,
@@ -133,7 +131,7 @@ export default async function ClientDetailPage({
             {summaries.length ? (
               <ul className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
                 {summaries.map((r) => {
-                  const stages = breakdown.get(r.id) ?? ({} as Record<Stage, number>);
+                  const stages = breakdown.get(r.id);
                   return (
                     <li key={r.id} className="px-5 py-3.5">
                       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -149,7 +147,7 @@ export default async function ClientDetailPage({
                               {r.code}
                             </span>
                             <PriorityBadge value={r.priority} dot />
-                            <ReqStatusBadge value={r.status} />
+                            <ReqStatusBadge value={r.displayStatus} />
                           </div>
                           <p className="mt-0.5 text-[12px] text-content-muted">
                             {r.location} · opened {formatDate(r.openedAt)} ·{" "}
@@ -160,10 +158,10 @@ export default async function ClientDetailPage({
                             <div className="mt-2 max-w-xs">
                               <SegmentBar
                                 height={5}
-                                segments={STAGES.map((s) => ({
-                                  label: STAGE[s].label,
-                                  value: stages[s] ?? 0,
-                                  tone: STAGE[s].tone,
+                                segments={PROGRESS_BUCKETS.map((b) => ({
+                                  label: b.label,
+                                  value: bucketStages(stages)[b.key],
+                                  tone: b.tone,
                                 }))}
                               />
                               <p className="mt-1 text-[11px] text-content-subtle tabular-nums">

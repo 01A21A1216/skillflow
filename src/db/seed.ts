@@ -35,6 +35,7 @@ import {
   STRENGTH_TEMPLATES,
   TEAM_SEEDS,
 } from "./seed-data";
+import { STAGE_ORDER, isRateBased, type Stage } from "../lib/domain";
 
 /* ------------------------------------------------------------------ *
  * Deterministic RNG
@@ -56,10 +57,18 @@ const int = (min: number, max: number) => Math.floor(rand() * (max - min + 1)) +
 const pick = <T,>(arr: readonly T[]): T => arr[Math.floor(rand() * arr.length)]!;
 const chance = (p: number) => rand() < p;
 const clampNum = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
+/**
+ * `n` distinct items, or the whole list if it is shorter.
+ *
+ * The target is fixed before the loop: `copy` shrinks with every splice, so
+ * re-reading its length each pass terminated the loop about half way and
+ * quietly returned too few items.
+ */
 const sample = <T,>(arr: readonly T[], n: number): T[] => {
   const copy = [...arr];
+  const want = Math.min(n, copy.length);
   const out: T[] = [];
-  while (out.length < Math.min(n, copy.length)) {
+  while (out.length < want) {
     out.push(copy.splice(Math.floor(rand() * copy.length), 1)[0]!);
   }
   return out;
@@ -256,6 +265,9 @@ interface ReqPlan {
 }
 const reqPlans: ReqPlan[] = [];
 
+/** Requirements opened inside the last fortnight, so the desk looks live. */
+const FRESH_REQUISITIONS = 8;
+
 for (let i = 0; i < REQ_COUNT; i += 1) {
   const family = pick(JOB_FAMILIES);
   const titleSpec = pick(family.titles);
@@ -263,7 +275,11 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
   const hm = hiringManagers.find((h) => h.department === family.department) ?? pick(hiringManagers);
   const lead = pick(recruiters);
 
-  const ageDays = int(3, 320);
+  // The first few are this fortnight's intake and the rest carry real history.
+  // Reserving them keeps both ends of the desk populated: fresh requirements
+  // that are still only sourcing, and old ones with twelve months of funnel
+  // behind them for the analytics to read.
+  const ageDays = i < FRESH_REQUISITIONS ? int(2, 17) : int(20, 330);
   const openedMs = daysAgo(ageDays);
   const openings = weighted<number>([
     [1, 70],
@@ -274,10 +290,10 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
 
   // Old requisitions have mostly resolved; young ones are still running.
   const status: ReqPlan["status"] =
-    ageDays < 7
+    ageDays < 12
       ? weighted([
-          ["draft", 35],
-          ["open", 65],
+          ["draft", 34],
+          ["open", 66],
         ] as [ReqPlan["status"], number][])
       : ageDays > 150
         ? weighted([
@@ -301,11 +317,13 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
   ] as [string, number][]);
 
   const employmentType = weighted([
-    ["full_time", 74],
-    ["contract", 13],
-    ["contract_to_hire", 8],
-    ["part_time", 3],
-    ["intern", 2],
+    ["full_time", 44],
+    ["w2", 21],
+    ["c2c", 14],
+    ["contract_to_hire", 11],
+    ["contract", 7],
+    ["part_time", 2],
+    ["intern", 1],
   ] as [string, number][]);
 
   const workMode = weighted([
@@ -315,6 +333,9 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
   ] as [string, number][]);
 
   const [baseMin, baseMax] = titleSpec.base;
+  const reqSkills = sample(family.skills, int(5, 8));
+  // Must-haves are the short list; whatever is left over is nice to have.
+  const requiredCount = Math.min(int(3, 4), reqSkills.length - 1);
   const locationSpec = workMode === "remote" ? { city: "Remote (US)" } : pick(CITIES);
 
   const row = {
@@ -335,14 +356,18 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
     seniority: titleSpec.seniority,
     minSalary: baseMin,
     maxSalary: baseMax,
-    billRateMin: employmentType.startsWith("contract") ? Math.round(baseMin / 2000) + 12 : null,
-    billRateMax: employmentType.startsWith("contract") ? Math.round(baseMax / 2000) + 22 : null,
+    billRateMin: isRateBased(employmentType) ? Math.round(baseMin / 2000) + 12 : null,
+    billRateMax: isRateBased(employmentType) ? Math.round(baseMax / 2000) + 22 : null,
     currency: "USD",
     experienceMin:
       titleSpec.seniority === "junior" ? 1 : titleSpec.seniority === "mid" ? 3 : titleSpec.seniority === "senior" ? 6 : 9,
     experienceMax:
       titleSpec.seniority === "junior" ? 3 : titleSpec.seniority === "mid" ? 6 : titleSpec.seniority === "senior" ? 10 : 18,
-    skills: sample(family.skills, int(5, 7)),
+    requiredSkills: reqSkills.slice(0, requiredCount),
+    preferredSkills: reqSkills.slice(requiredCount),
+    // Corp-to-corp work is where clients are strictest about authorization;
+    // full-time roles mostly accept anyone already authorized to work.
+    visaRequirements: visaPolicy(employmentType),
     description: family.blurb,
     requirements: family.requirements,
     openedAt: isoDay(openedMs),
@@ -378,6 +403,29 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
     `Opened ${row.code} — ${row.title} for ${client.name}`,
     openedMs,
   );
+}
+
+/**
+ * Which work authorizations a client will accept.
+ *
+ * Corp-to-corp engagements are where the constraint actually bites, so those
+ * carry an explicit list; most full-time roles simply rule out sponsorship.
+ */
+function visaPolicy(employmentType: string): string[] {
+  if (employmentType === "c2c") {
+    return pick([
+      ["citizen", "green_card", "h1b", "ead"],
+      ["citizen", "green_card", "h1b"],
+      ["citizen", "green_card", "h1b", "ead", "opt_cpt"],
+    ]);
+  }
+  if (employmentType === "w2" || employmentType === "contract") {
+    return chance(0.55) ? ["citizen", "green_card", "ead", "h1b"] : [];
+  }
+  if (employmentType === "full_time") {
+    return chance(0.38) ? ["citizen", "green_card", "ead"] : [];
+  }
+  return [];
 }
 
 /* ------------------------------------------------------------------ *
@@ -455,10 +503,13 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
     currency: "USD",
     noticePeriodDays: notice,
     workAuthorization: weighted([
-      ["citizen", 68],
-      ["permanent_resident", 14],
-      ["visa_holder", 12],
-      ["requires_sponsorship", 6],
+      ["citizen", 46],
+      ["green_card", 17],
+      ["h1b", 18],
+      ["ead", 8],
+      ["opt_cpt", 6],
+      ["tn", 2],
+      ["requires_sponsorship", 3],
     ] as [string, number][]),
     willingToRelocate: relocate,
     linkedinUrl: `https://linkedin.com/in/${handle.replace(/\./g, "-")}`,
@@ -498,36 +549,67 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
  * 5. Pipeline simulation
  * ------------------------------------------------------------------ */
 
-const STAGES = ["sourced", "screening", "submitted", "interview", "offer", "hired"] as const;
-type StageName = (typeof STAGES)[number];
+/**
+ * The eleven pipeline stages, in order, indexed the same way `STAGE_ORDER` is.
+ * The simulation works in indices, so every reference to a position goes
+ * through `SI` rather than a literal — an inserted stage then costs one line.
+ */
+const STAGES = STAGE_ORDER;
+type StageName = Stage;
+
+const SI = (stage: StageName) => STAGES.indexOf(stage);
 
 /** Typical dwell time per stage, in days. */
 const DWELL: Record<StageName, [number, number]> = {
-  sourced: [1, 6],
-  screening: [2, 8],
-  submitted: [2, 9],
-  interview: [5, 20],
+  new: [1, 4],
+  screening: [2, 6],
+  qualified: [1, 4],
+  submitted: [1, 5],
+  client_review: [2, 9],
+  interview_scheduled: [3, 9],
+  interview_completed: [1, 4],
+  feedback_pending: [1, 5],
+  selected: [1, 6],
   offer: [3, 12],
-  hired: [0, 0],
+  joined: [0, 0],
+  rejected: [0, 0],
+  withdrawn: [0, 0],
+  on_hold: [0, 0],
 };
 
 /** How long a live submission has plausibly been sitting where it is. */
 const LIVE_AGE: Record<StageName, [number, number]> = {
-  sourced: [0, 7],
+  new: [0, 6],
   screening: [0, 6],
-  submitted: [1, 8],
-  interview: [1, 15],
+  qualified: [0, 5],
+  submitted: [1, 7],
+  client_review: [1, 11],
+  interview_scheduled: [1, 12],
+  interview_completed: [0, 5],
+  feedback_pending: [1, 8],
+  selected: [1, 7],
   offer: [1, 10],
-  hired: [0, 0],
+  joined: [0, 0],
+  rejected: [0, 0],
+  withdrawn: [0, 0],
+  on_hold: [2, 40],
 };
 
 const REJECTION_BY_STAGE: Record<StageName, string[]> = {
-  sourced: ["Skills mismatch", "Compensation misaligned", "Unresponsive", "Location or work-mode conflict"],
+  new: ["Skills mismatch", "Compensation misaligned", "Unresponsive", "Location or work-mode conflict"],
   screening: ["Insufficient experience", "Compensation misaligned", "Work authorization", "Skills mismatch"],
+  qualified: ["Compensation misaligned", "Unresponsive", "Candidate withdrew"],
   submitted: ["Skills mismatch", "Insufficient experience", "Position filled by another candidate"],
-  interview: ["Failed technical interview", "Culture / values fit", "Skills mismatch", "Unresponsive"],
+  client_review: ["Skills mismatch", "Insufficient experience", "Position filled by another candidate", "Work authorization"],
+  interview_scheduled: ["Unresponsive", "Candidate withdrew", "Compensation misaligned"],
+  interview_completed: ["Failed technical interview", "Culture / values fit", "Skills mismatch"],
+  feedback_pending: ["Failed technical interview", "Culture / values fit"],
+  selected: ["Compensation misaligned", "Candidate withdrew", "Position filled by another candidate"],
   offer: ["Compensation misaligned", "Position filled by another candidate", "Candidate withdrew"],
-  hired: [],
+  joined: [],
+  rejected: [],
+  withdrawn: [],
+  on_hold: [],
 };
 
 const INTERVIEW_LOOPS: Record<string, { type: string; title: string }[]> = {
@@ -561,6 +643,22 @@ function loopFor(department: string) {
   return INTERVIEW_LOOPS.default!;
 }
 
+/**
+ * The furthest stage anyone could plausibly have reached on a requirement of
+ * this age. Without it every requisition — including one opened last week —
+ * ends up with somebody at offer, and the derived "Active Sourcing" and
+ * "Candidate Submitted" statuses never occur.
+ */
+function reachableBy(ageDays: number) {
+  if (ageDays < 6) return SI("screening");
+  if (ageDays < 11) return SI("qualified");
+  if (ageDays < 17) return SI("client_review");
+  if (ageDays < 25) return SI("interview_scheduled");
+  if (ageDays < 34) return SI("feedback_pending");
+  if (ageDays < 45) return SI("selected");
+  return SI("joined");
+}
+
 interface SimContext {
   req: (typeof requisitions)[number];
   family: (typeof JOB_FAMILIES)[number];
@@ -579,24 +677,42 @@ function buildSubmission(
 ) {
   const { req, family, loop, openedMs } = ctx;
 
-  const furthest =
+  // Where this submission got to. Live pipelines are fattest early and thin
+  // towards offer; closed-out ones skew earlier still, because most candidates
+  // are lost before a client ever sees them.
+  const rawFurthest =
     kind === "hired"
-      ? 5
+      ? SI("joined")
       : kind === "live"
         ? weighted([
-            [0, 17],
-            [1, 21],
-            [2, 20],
-            [3, 30],
-            [4, 12],
+            [SI("new"), 12],
+            [SI("screening"), 12],
+            [SI("qualified"), 9],
+            [SI("submitted"), 11],
+            [SI("client_review"), 13],
+            [SI("interview_scheduled"), 17],
+            [SI("interview_completed"), 5],
+            [SI("feedback_pending"), 7],
+            [SI("selected"), 6],
+            [SI("offer"), 8],
           ] as [number, number][])
         : weighted([
-            [0, 31],
-            [1, 26],
-            [2, 20],
-            [3, 18],
-            [4, 5],
+            [SI("new"), 24],
+            [SI("screening"), 21],
+            [SI("qualified"), 10],
+            [SI("submitted"), 13],
+            [SI("client_review"), 13],
+            [SI("interview_scheduled"), 4],
+            [SI("interview_completed"), 8],
+            [SI("feedback_pending"), 2],
+            [SI("selected"), 2],
+            [SI("offer"), 3],
           ] as [number, number][]);
+
+  // A requirement opened last week cannot have anyone at offer: cap how far
+  // this submission can have got by how long there has been to get there.
+  const reqAgeDays = Math.max(1, Math.floor((NOW - openedMs) / DAY));
+  const furthest = Math.min(rawFurthest, reachableBy(reqAgeDays));
 
   const stageName = STAGES[furthest]!;
 
@@ -629,7 +745,7 @@ function buildSubmission(
   const hired = kind === "hired";
   const withdrew = kind === "closed" && chance(0.17);
   const status = hired ? "hired" : kind === "live" ? "active" : withdrew ? "withdrawn" : "rejected";
-  const finalStage = hired ? "hired" : kind === "live" ? stageName : withdrew ? "withdrawn" : "rejected";
+  const finalStage = hired ? "joined" : kind === "live" ? stageName : withdrew ? "withdrawn" : "rejected";
 
   const closedAt =
     kind === "closed"
@@ -638,7 +754,7 @@ function buildSubmission(
 
   const submissionId = id("sub");
   const owner = req.leadRecruiterId!;
-  const submittedAt = furthest >= 2 ? enteredAt[2]! : null;
+  const submittedAt = furthest >= SI("submitted") ? enteredAt[SI("submitted")]! : null;
 
   if (hired) candidate.status = "placed";
   else if (kind === "closed" && chance(0.08)) candidate.status = "passive";
@@ -650,7 +766,7 @@ function buildSubmission(
     stage: finalStage,
     status,
     ownerId: owner,
-    matchScore: clampNum(Math.round(58 + furthest * 5 + (candidate.rating ?? 0) * 3 + int(-11, 11)), 34, 98),
+    matchScore: clampNum(Math.round(56 + furthest * 3 + (candidate.rating ?? 0) * 3 + int(-11, 11)), 34, 98),
     expectedRate: req.billRateMin ? int(req.billRateMin, req.billRateMax ?? req.billRateMin + 20) : null,
     rejectionReason:
       status === "rejected"
@@ -715,7 +831,12 @@ function buildSubmission(
   /* --- Interviews ------------------------------------------------ */
 
   /** Create one interview round, its panel and (if it already happened) feedback. */
-  function pushInterview(roundNumber: number, scheduledAt: number, forcePositive?: boolean) {
+  function pushInterview(
+    roundNumber: number,
+    scheduledAt: number,
+    forcePositive?: boolean,
+    opts: { withholdFeedback?: boolean; requireFeedback?: boolean } = {},
+  ) {
     const spec = loop[Math.min(roundNumber - 1, loop.length - 1)]!;
     const inFuture = scheduledAt > NOW;
 
@@ -804,7 +925,8 @@ function buildSubmission(
       const skipRate = ageDays > 21 ? 0.015 : ageDays > 7 ? 0.12 : 0.3;
 
       for (const p of panelists) {
-        if (chance(skipRate)) continue;
+        if (opts.withholdFeedback) continue;
+        if (!opts.requireFeedback && chance(skipRate)) continue;
         const lean = outcome.includes("yes");
         const overall = lean ? int(3, 5) : int(1, 3);
         const jitter = () => clampNum(overall + int(-1, 1), 1, 5);
@@ -855,10 +977,20 @@ function buildSubmission(
     return { positive, completed: ivStatus === "completed" };
   }
 
-  if (furthest >= 3) {
-    const roundsRun = hired || furthest >= 4 ? int(3, loop.length) : int(1, 3);
-    let ivCursor = enteredAt[3]!;
+  if (furthest >= SI("interview_scheduled")) {
+    const clearedTheLoop = furthest >= SI("selected");
+    const roundsRun = hired || clearedTheLoop ? int(3, loop.length) : int(1, 3);
+    let ivCursor = enteredAt[SI("interview_scheduled")]!;
     let lastRound = 0;
+
+    // A candidate resting on Feedback Pending is, by definition, owed a
+    // scorecard — so the simulation withholds one rather than leaving the
+    // stage decorative.
+    const owesFeedback = kind === "live" && stageName === "feedback_pending";
+    // The converse: a live candidate past Feedback Pending owes nobody a
+    // scorecard, so the app's own rule would not push them back there.
+    const feedbackComplete =
+      kind === "live" && furthest >= SI("interview_completed") && !owesFeedback;
 
     for (let r = 1; r <= roundsRun; r += 1) {
       ivCursor += int(2, 7) * DAY;
@@ -866,15 +998,21 @@ function buildSubmission(
       if (scheduledAt > NOW) break; // the rest of the loop has not happened yet
 
       lastRound = r;
-      // Anyone who got to offer or hire must have cleared every round.
-      const result = pushInterview(r, scheduledAt, furthest >= 4 ? true : undefined);
+      // Anyone who got to selected or beyond must have cleared every round.
+      const result = pushInterview(r, scheduledAt, clearedTheLoop ? true : undefined, {
+        withholdFeedback: owesFeedback && r === roundsRun,
+        requireFeedback: feedbackComplete,
+      });
       if (result.completed && !result.positive) break; // the loop ends on a no
     }
 
-    // Live candidates mid-loop usually have their next round already booked.
-    // The budget is only drawn down here, where an upcoming interview is
-    // actually created, so it maps one-to-one onto the schedule view.
-    if (kind === "live" && furthest === 3 && budget.upcomingInterviews > 0 && chance(0.78)) {
+    // Someone sitting at Interview Scheduled has their next round booked ahead
+    // of them. The budget is only drawn down here, where an upcoming interview
+    // is actually created, so it maps one-to-one onto the schedule view.
+    // Sitting at Interview Scheduled *means* a round is booked ahead of you, so
+    // this is unconditional: the stage would otherwise claim something the
+    // schedule could not show.
+    if (kind === "live" && stageName === "interview_scheduled" && budget.upcomingInterviews > 0) {
       budget.upcomingInterviews -= 1;
       pushInterview(lastRound + 1, businessMoment(daysAgo(-int(1, 16)), 9, 16));
     }
@@ -882,8 +1020,8 @@ function buildSubmission(
 
   /* --- Offer ----------------------------------------------------- */
 
-  if (furthest >= 4) {
-    const offerStart = enteredAt[4]!;
+  if (furthest >= SI("offer")) {
+    const offerStart = enteredAt[SI("offer")]!;
     const lo = req.minSalary ?? 120000;
     const hi = req.maxSalary ?? 180000;
     const base = Math.round(clampNum(lo + rand() * (hi - lo), lo, hi) / 500) * 500;
@@ -988,7 +1126,7 @@ function buildSubmission(
  * ------------------------------------------------------------------ */
 
 /** Only a limited number of genuinely upcoming interviews, so the week looks real. */
-const budget = { upcomingInterviews: 46 };
+const budget = { upcomingInterviews: 40 };
 
 for (const plan of reqPlans) {
   const { row: req, family, openedMs, ageDays, status } = plan;
@@ -1052,7 +1190,7 @@ for (const plan of reqPlans) {
       entityId: req.id,
       authorId: req.leadRecruiterId!,
       body: pick([
-        `Intake call complete. Must-haves narrowed to ${(req.skills as string[]).slice(0, 3).join(", ")}; everything else is coachable.`,
+        `Intake call complete. Must-haves narrowed to ${(req.requiredSkills as string[]).slice(0, 3).join(", ")}; everything else is coachable.`,
         "Hiring manager wants a slate of four before making any decisions. Holding submissions until we have breadth.",
         "Market feedback: our band is roughly 8% under comparable roles in this metro. Raised with compensation.",
         "Approved to engage an agency partner if we do not have three qualified candidates in the loop within two weeks.",

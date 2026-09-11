@@ -18,6 +18,7 @@ import {
   STAGE,
   SUBMISSION_STATUS,
   USER_ROLE,
+  WORK_AUTHORIZATION,
   WORK_MODE,
   type Tone,
 } from "@/lib/domain";
@@ -62,6 +63,7 @@ export const ReqStatusBadge = metaBadge(REQ_STATUS as AnyMeta);
 export const PriorityBadge = metaBadge(PRIORITY as AnyMeta);
 export const EmploymentBadge = metaBadge(EMPLOYMENT_TYPE as AnyMeta);
 export const WorkModeBadge = metaBadge(WORK_MODE as AnyMeta);
+export const WorkAuthBadge = metaBadge(WORK_AUTHORIZATION as AnyMeta);
 export const SeniorityBadge = metaBadge(SENIORITY as AnyMeta);
 export const CandidateStatusBadge = metaBadge(CANDIDATE_STATUS as AnyMeta);
 export const SourceBadge = metaBadge(SOURCE as AnyMeta);

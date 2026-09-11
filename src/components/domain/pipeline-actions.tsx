@@ -7,12 +7,26 @@ import {
   ExternalLink,
   FileSignature,
   MoreHorizontal,
+  PauseCircle,
+  RotateCcw,
   UserMinus,
 } from "lucide-react";
 
 import type { PipelineCard } from "@/server/queries/pipeline";
-import { PIPELINE_STAGES, REJECTION_REASONS, STAGE, stageIndex, type Stage } from "@/lib/domain";
-import { moveStage, rejectSubmission } from "@/server/actions/pipeline";
+import {
+  PIPELINE_STAGES,
+  REJECTION_REASONS,
+  STAGE,
+  atOrPast,
+  stageIndex,
+  type Stage,
+} from "@/lib/domain";
+import {
+  holdSubmission,
+  moveStage,
+  rejectSubmission,
+  reopenSubmission,
+} from "@/server/actions/pipeline";
 import { Button } from "@/components/ui/button";
 import { Field, Select, Textarea } from "@/components/ui/field";
 import { Menu, MenuItem, MenuLabel } from "@/components/ui/misc";
@@ -177,10 +191,125 @@ export function RejectModal({
 }
 
 /* ------------------------------------------------------------------ *
+ * On hold
+ * ------------------------------------------------------------------ */
+
+export function HoldModal({
+  open,
+  onClose,
+  submissionId,
+  candidateName,
+  requisitionTitle,
+}: {
+  open: boolean;
+  onClose: () => void;
+  submissionId: string;
+  candidateName: string;
+  requisitionTitle: string;
+}) {
+  const router = useRouter();
+
+  return (
+    <FormModal
+      open={open}
+      onClose={onClose}
+      size="sm"
+      title="Put this candidate on hold"
+      description={`${candidateName} — ${requisitionTitle}`}
+      action={holdSubmission}
+      submitLabel="Put on hold"
+      onSuccess={() => router.refresh()}
+    >
+      {({ errors }) => (
+        <>
+          <input type="hidden" name="submissionId" value={submissionId} />
+          <p className="text-[13px] leading-relaxed text-content-muted">
+            They leave the board but keep their place. Reopening puts them back at
+            the stage they are on now, not at the start.
+          </p>
+          <Field label="Why" hint="Added to the candidate timeline." error={errors.note}>
+            <Textarea
+              name="note"
+              placeholder="Client paused the requirement until the next budget cycle."
+            />
+          </Field>
+        </>
+      )}
+    </FormModal>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Reopen
+ * ------------------------------------------------------------------ */
+
+/**
+ * Bring a held, rejected or withdrawn candidate back into the pipeline.
+ *
+ * Someone put on hold resumes at the stage they left — the action reads it
+ * back off the stage history — so the picker here only matters for a candidate
+ * who was closed out and is genuinely restarting.
+ */
+export function ReopenModal({
+  open,
+  onClose,
+  submissionId,
+  candidateName,
+  requisitionTitle,
+  wasOnHold,
+}: {
+  open: boolean;
+  onClose: () => void;
+  submissionId: string;
+  candidateName: string;
+  requisitionTitle: string;
+  wasOnHold: boolean;
+}) {
+  const router = useRouter();
+
+  return (
+    <FormModal
+      open={open}
+      onClose={onClose}
+      size="sm"
+      title="Bring this candidate back"
+      description={`${candidateName} — ${requisitionTitle}`}
+      action={reopenSubmission}
+      submitLabel="Reopen"
+      onSuccess={() => router.refresh()}
+    >
+      {({ errors }) => (
+        <>
+          <input type="hidden" name="submissionId" value={submissionId} />
+          {wasOnHold ? (
+            <>
+              <input type="hidden" name="stage" value="screening" />
+              <p className="text-[13px] leading-relaxed text-content-muted">
+                They go back to the stage they were on when they were put on hold.
+              </p>
+            </>
+          ) : (
+            <Field label="Restart at" error={errors.stage}>
+              <Select name="stage" defaultValue="screening">
+                {PIPELINE_STAGES.filter((st) => st.value !== "joined").map((st) => (
+                  <option key={st.value} value={st.value}>
+                    {st.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
+        </>
+      )}
+    </FormModal>
+  );
+}
+
+/* ------------------------------------------------------------------ *
  * The card overflow menu
  * ------------------------------------------------------------------ */
 
-type Dialog = "move" | "reject" | "interview" | "offer" | null;
+type Dialog = "move" | "reject" | "hold" | "reopen" | "interview" | "offer" | null;
 
 export function CardActions({ card }: { card: PipelineCard }) {
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -233,13 +362,24 @@ export function CardActions({ card }: { card: PipelineCard }) {
               {capabilities.draftOffer ? (
                 <MenuItem
                   icon={<FileSignature className="size-3.5" />}
-                  disabled={stageIndex(card.stage) < 2 || Boolean(card.offerStatus)}
+                  disabled={!atOrPast(card.stage, "submitted") || Boolean(card.offerStatus)}
                   onClick={() => {
                     close();
                     setDialog("offer");
                   }}
                 >
                   {card.offerStatus ? "Offer already drafted" : "Draft offer…"}
+                </MenuItem>
+              ) : null}
+              {capabilities.move ? (
+                <MenuItem
+                  icon={<PauseCircle className="size-3.5" />}
+                  onClick={() => {
+                    close();
+                    setDialog("hold");
+                  }}
+                >
+                  Put on hold…
                 </MenuItem>
               ) : null}
               {capabilities.close ? (
@@ -273,6 +413,13 @@ export function CardActions({ card }: { card: PipelineCard }) {
         candidateName={card.candidateName}
         requisitionTitle={card.requisitionTitle}
       />
+      <HoldModal
+        open={dialog === "hold"}
+        onClose={() => setDialog(null)}
+        submissionId={card.id}
+        candidateName={card.candidateName}
+        requisitionTitle={card.requisitionTitle}
+      />
       <ScheduleInterviewModal
         open={dialog === "interview"}
         onClose={() => setDialog(null)}
@@ -300,24 +447,55 @@ export function RowActions({
   candidateName,
   requisitionTitle,
   stage,
+  status,
 }: {
   submissionId: string;
   candidateName: string;
   requisitionTitle: string;
   stage: Stage;
+  /** Anything other than `active` gets Reopen instead of the working controls. */
+  status: string;
 }) {
   const [dialog, setDialog] = useState<Dialog>(null);
+  const active = status === "active";
 
   return (
     <>
       <div className="flex items-center gap-1.5">
-        <Button size="xs" variant="secondary" onClick={() => setDialog("move")}>
-          Move
-        </Button>
-        <Button size="xs" variant="ghost" onClick={() => setDialog("reject")}>
-          Close out
-        </Button>
+        {active ? (
+          <>
+            <Button size="xs" variant="secondary" onClick={() => setDialog("move")}>
+              Move
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => setDialog("hold")}>
+              Hold
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => setDialog("reject")}>
+              Close out
+            </Button>
+          </>
+        ) : (
+          <Button size="xs" variant="secondary" onClick={() => setDialog("reopen")}>
+            <RotateCcw className="size-3" />
+            Reopen
+          </Button>
+        )}
       </div>
+      <HoldModal
+        open={dialog === "hold"}
+        onClose={() => setDialog(null)}
+        submissionId={submissionId}
+        candidateName={candidateName}
+        requisitionTitle={requisitionTitle}
+      />
+      <ReopenModal
+        open={dialog === "reopen"}
+        onClose={() => setDialog(null)}
+        submissionId={submissionId}
+        candidateName={candidateName}
+        requisitionTitle={requisitionTitle}
+        wasOnHold={status === "on_hold"}
+      />
       <MoveStageModal
         open={dialog === "move"}
         onClose={() => setDialog(null)}

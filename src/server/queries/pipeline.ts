@@ -16,7 +16,7 @@ import {
   submissions,
   users,
 } from "@/db/schema";
-import { ACTIVE_STAGES, STAGE_SLA_DAYS, type Stage } from "@/lib/domain";
+import { ACTIVE_STAGES, STAGE_SLA_DAYS, visaMatches, type Stage } from "@/lib/domain";
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { submissionScope, visibleRequisitionIds } from "@/server/authz";
@@ -46,6 +46,9 @@ export interface PipelineCard {
   candidateLocation: string;
   candidateRating: number;
   candidateSkills: string[];
+  /** Shown on the card (§8) and checked against the requirement's accepted list. */
+  candidateWorkAuthorization: string;
+  visaMismatch: boolean;
   requisitionId: string;
   requisitionCode: string;
   requisitionTitle: string;
@@ -159,6 +162,8 @@ export async function pipelineCards(filters: PipelineFilters = {}, actor?: User)
       candidateLocation: c.location,
       candidateRating: c.rating,
       candidateSkills: c.skills ?? [],
+      candidateWorkAuthorization: c.workAuthorization,
+      visaMismatch: !visaMatches(r.visaRequirements, c.workAuthorization),
       requisitionId: r.id,
       requisitionCode: r.code,
       requisitionTitle: r.title,

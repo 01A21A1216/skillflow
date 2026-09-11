@@ -198,14 +198,15 @@ export default async function CandidateDetailPage({
                           <span className="text-[11.5px] text-content-subtle tabular-nums">
                             Match {s.matchScore}
                           </span>
-                          {s.status === "active" ? (
+                          {s.status === "hired" || !can(actor, "submission.move") ? null : (
                             <RowActions
                               submissionId={s.id}
                               candidateName={name}
                               requisitionTitle={r.title}
                               stage={s.stage as Stage}
+                              status={s.status}
                             />
-                          ) : null}
+                          )}
                         </div>
                       </div>
                     </li>

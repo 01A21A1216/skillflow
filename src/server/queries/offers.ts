@@ -216,7 +216,7 @@ export async function offerReadySubmissions() {
     .from(submissions)
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
-    .where(and(eq(submissions.status, "active"), inArray(submissions.stage, ["interview", "offer"])))
+    .where(and(eq(submissions.status, "active"), inArray(submissions.stage, ["interview_completed", "feedback_pending", "selected", "offer"])))
     .orderBy(desc(submissions.stageSince))
     )
     .filter((r) => !existing.has(r.submissionId))

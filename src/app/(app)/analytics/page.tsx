@@ -69,8 +69,8 @@ export default async function AnalyticsPage({
   const offers = await offerStats();
 
   const submitted = steps.find((s) => s.stage === "submitted")?.count ?? 0;
-  const hires = steps.find((s) => s.stage === "hired")?.count ?? 0;
-  const sourcedToHire = steps.find((s) => s.stage === "hired")?.overallConversion ?? 0;
+  const hires = steps.find((s) => s.stage === "joined")?.count ?? 0;
+  const sourcedToHire = steps.find((s) => s.stage === "joined")?.overallConversion ?? 0;
 
   const trendSeries = [
     { key: "added", label: "Added", color: SERIES[0] },

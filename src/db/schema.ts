@@ -185,7 +185,15 @@ export const requisitions = pgTable(
     currency: text("currency").notNull().default("USD"),
     experienceMin: integer("experience_min").notNull().default(0),
     experienceMax: integer("experience_max").notNull().default(10),
-    skills: jsonb("skills").$type<string[]>().notNull().default([]),
+    /** Must-haves. A candidate without these is not submittable. */
+    requiredSkills: jsonb("required_skills").$type<string[]>().notNull().default([]),
+    /** Nice-to-haves. They raise a match score but never gate a submission. */
+    preferredSkills: jsonb("preferred_skills").$type<string[]>().notNull().default([]),
+    /**
+     * Work authorizations this client will accept, from `WORK_AUTHORIZATIONS`.
+     * Empty means no constraint — not "none accepted".
+     */
+    visaRequirements: jsonb("visa_requirements").$type<string[]>().notNull().default([]),
     description: text("description").notNull().default(""),
     requirements: jsonb("requirements").$type<string[]>().notNull().default([]),
     openedAt: text("opened_at").notNull(),
@@ -281,7 +289,7 @@ export const submissions = pgTable(
     requisitionId: text("requisition_id")
       .notNull()
       .references(() => requisitions.id, { onDelete: "cascade" }),
-    stage: text("stage").notNull().default("sourced"),
+    stage: text("stage").notNull().default("new"),
     status: text("status").notNull().default("active"),
     ownerId: text("owner_id")
       .notNull()

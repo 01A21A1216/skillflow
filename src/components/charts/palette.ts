@@ -32,6 +32,21 @@ export const ORDINAL = [
   "var(--ord-6)",
 ] as const;
 
+/**
+ * Pick the ordinal step for item `i` of `n`.
+ *
+ * The ramp has six validated steps; an ordered category list can be longer
+ * (eleven pipeline stages). Spreading the list across the ramp keeps the
+ * light-to-dark reading of order and introduces no unvalidated colour, which
+ * clamping to the darkest step would have destroyed — everything past the sixth
+ * bar would have been identical.
+ */
+export function ordinalStep(i: number, n: number) {
+  if (n <= 1) return ORDINAL[ORDINAL.length - 1]!;
+  const slot = Math.round((i / (n - 1)) * (ORDINAL.length - 1));
+  return ORDINAL[Math.min(Math.max(slot, 0), ORDINAL.length - 1)]!;
+}
+
 export const GRID = "var(--chart-grid)";
 export const AXIS = "var(--chart-axis)";
 export const SURFACE = "var(--chart-surface)";

@@ -26,6 +26,7 @@ import {
   SeniorityBadge,
   SkillChips,
   StageBadge,
+  WorkAuthBadge,
   WorkModeBadge,
 } from "@/components/domain/badges";
 import { EditRequisitionButton } from "@/components/domain/forms/requisition-form";
@@ -128,7 +129,7 @@ export default async function RequisitionDetailPage({
         }
         meta={
           <div className="flex flex-wrap items-center gap-2">
-            <ReqStatusBadge value={req.status} dot />
+            <ReqStatusBadge value={summary.displayStatus} dot />
             <PriorityBadge value={req.priority} dot />
             <WorkModeBadge value={req.workMode} />
             <EmploymentBadge value={req.employmentType} />
@@ -153,7 +154,11 @@ export default async function RequisitionDetailPage({
             />
             ) : null}
             {can(actor, "requisition.status") ? (
-              <RequisitionStatusMenu requisitionId={req.id} current={req.status} />
+              <RequisitionStatusMenu
+                requisitionId={req.id}
+                current={req.status}
+                display={summary.displayStatus}
+              />
             ) : null}
           </>
         }
@@ -257,7 +262,7 @@ export default async function RequisitionDetailPage({
                   },
                 }}
               >
-                <PipelineBoard cards={cards} requiredSkills={req.skills} compact />
+                <PipelineBoard cards={cards} requiredSkills={req.requiredSkills} compact />
               </PipelineOptionsProvider>
             ) : (
               <EmptyState
@@ -418,8 +423,30 @@ export default async function RequisitionDetailPage({
                 <p className="mb-2 text-[10.5px] font-semibold tracking-[0.08em] text-content-subtle uppercase">
                   Must-have skills
                 </p>
-                <SkillChips skills={req.skills} max={20} />
+                <SkillChips skills={req.requiredSkills} max={20} />
               </div>
+
+              {req.preferredSkills.length ? (
+                <div className="mt-4">
+                  <p className="mb-2 text-[10.5px] font-semibold tracking-[0.08em] text-content-subtle uppercase">
+                    Nice to have
+                  </p>
+                  <SkillChips skills={req.preferredSkills} max={20} />
+                </div>
+              ) : null}
+
+              {req.visaRequirements.length ? (
+                <div className="mt-4">
+                  <p className="mb-2 text-[10.5px] font-semibold tracking-[0.08em] text-content-subtle uppercase">
+                    Accepted work authorization
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {req.visaRequirements.map((v) => (
+                      <WorkAuthBadge key={v} value={v} size="sm" />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </Card>
 
             <Card>

@@ -17,7 +17,7 @@ import {
 
 import { cn, formatNumber, truncate } from "@/lib/utils";
 import { ChartSkeleton, TooltipShell, useChartPalette } from "./primitives";
-import { AXIS, GRID, ORDINAL, SERIES, SURFACE } from "./palette";
+import { AXIS, GRID, SERIES, SURFACE, ordinalStep } from "./palette";
 
 const MARGIN = { top: 8, right: 8, bottom: 0, left: -14 };
 
@@ -276,7 +276,7 @@ export function Columns({
           {rows(data).map((_, i) => (
             <Cell
               key={i}
-              fill={resolve(ordinal ? ORDINAL[Math.min(i, ORDINAL.length - 1)]! : color)}
+              fill={resolve(ordinal ? ordinalStep(i, rows(data).length) : color)}
             />
           ))}
         </Bar>
@@ -365,7 +365,7 @@ export function HorizontalBars({
           {rows(data).map((_, i) => (
             <Cell
               key={i}
-              fill={resolve(ordinal ? ORDINAL[Math.min(i, ORDINAL.length - 1)]! : color)}
+              fill={resolve(ordinal ? ordinalStep(i, rows(data).length) : color)}
             />
           ))}
         </Bar>
@@ -567,7 +567,7 @@ export function FunnelBars({
     <ol className={cn("space-y-2.5", className)}>
       {steps.map((s, i) => {
         const width = top ? Math.max((s.count / top) * 100, 1.5) : 0;
-        const hue = ORDINAL[Math.min(i, ORDINAL.length - 1)]!;
+        const hue = ordinalStep(i, steps.length);
         return (
           <li key={s.label}>
             <div className="mb-1 flex items-baseline justify-between gap-3">
