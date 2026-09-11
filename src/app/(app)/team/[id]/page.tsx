@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Briefcase, CalendarDays, Clock, Mail, Phone } from "lucide-react";
+import { Briefcase, CalendarDays, Clock, Gauge, Mail, Phone, PhoneCall } from "lucide-react";
 
 import { PageBody, PageHeader } from "@/components/layout/page-header";
 import {
@@ -19,6 +19,15 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Meter } from "@/components/ui/misc";
 import { formatDate, formatDateTime, pluralize } from "@/lib/utils";
 import { getTeamMember } from "@/server/queries/people";
+import {
+  owedScorecards,
+  recruiterFollowUps,
+  recruiterScorecard,
+  recruiterTrend,
+} from "@/server/queries/recruiter";
+import { StackedColumns } from "@/components/charts/charts";
+import { ChartFrame } from "@/components/charts/primitives";
+import { SERIES } from "@/components/charts/palette";
 import { listRequisitions, requisitionHealth } from "@/server/queries/requisitions";
 import { requirePermission } from "@/server/session";
 
@@ -51,6 +60,17 @@ export default async function TeamMemberPage({
     ["open", "on_hold", "draft"].includes(r.requisition.status),
   );
   const upcoming = interviews.filter((i) => i.isUpcoming);
+
+  // The personal desk view (§12). Only meaningful for people who own
+  // requirements — an interviewer has no funnel of their own, and a row of
+  // zeroes would read as a broken page rather than an empty one.
+  const ownsADesk = ["recruiter", "recruitment_manager", "sourcer", "super_admin"].includes(
+    user.role,
+  );
+  const desk = ownsADesk ? await recruiterScorecard(user.id) : null;
+  const trend = ownsADesk ? await recruiterTrend(user.id) : null;
+  const followUps = ownsADesk ? await recruiterFollowUps(user.id) : [];
+  const owedFeedback = await owedScorecards(user.id);
 
   return (
     <>
@@ -108,6 +128,145 @@ export default async function TeamMemberPage({
             tone={member.feedbackOwed ? "amber" : "violet"}
           />
         </section>
+
+        {desk ? (
+          <Card>
+            <CardHeader
+              icon={<Gauge className="size-4" />}
+              title="This desk"
+              description="Where their candidates stand now, and what they have put through in the last 90 days."
+            />
+            <div className="mt-4 grid gap-x-5 gap-y-4 sm:grid-cols-3 xl:grid-cols-6">
+              {[
+                { label: "Requirements", value: desk.assignedRequirements, note: `${desk.agingRequirements} open over 15 days` },
+                { label: "Sourced", value: desk.sourced, note: "added in 90 days" },
+                { label: "Screened", value: desk.screened, note: "qualified in 90 days" },
+                { label: "Submitted", value: desk.submitted, note: "to clients in 90 days" },
+                { label: "Interviews booked", value: desk.interviewsScheduled, note: `${desk.interviewsCompleted} completed` },
+                { label: "Feedback pending", value: desk.feedbackPending, note: "scorecards owed to them" },
+                { label: "Selected", value: desk.selected, note: "live, at or near offer" },
+                { label: "At offer", value: desk.offers, note: "live offers out" },
+                { label: "Joined", value: desk.joined, note: "all time" },
+                { label: "Closed out", value: desk.rejected, note: "rejected or withdrawn" },
+                { label: "Follow-ups due", value: desk.followUpsDue, note: "promised callbacks" },
+              ].map((m) => (
+                <div key={m.label}>
+                  <p className="text-[11px] font-medium tracking-[0.04em] text-content-subtle uppercase">
+                    {m.label}
+                  </p>
+                  <p className="mt-0.5 text-[20px] leading-none font-semibold text-content tabular-nums">
+                    {m.value}
+                  </p>
+                  <p className="mt-1 text-[11px] text-content-subtle">{m.note}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-4 border-t border-border-base pt-3 text-[11.5px] leading-relaxed text-content-subtle">
+              Sourced, screened and submitted are things that <em>happened</em> in the last 90
+              days; selected, at offer and joined are where candidates <em>are</em>. The two do
+              not add up to each other, and should not be read as if they did.
+            </p>
+          </Card>
+        ) : null}
+
+        {trend ? (
+          <ChartFrame
+            title="Activity by week"
+            description="Whether a week went on sourcing or on closing, rather than a single measure of busy."
+            table={{
+              columns: ["Week", "Added", "Submitted", "Interviews", "Contacts"],
+              rows: trend.map((t) => [
+                t.label,
+                String(t.added),
+                String(t.submitted),
+                String(t.interviews),
+                String(t.contacts),
+              ]),
+            }}
+          >
+            <StackedColumns
+              data={trend}
+              xKey="label"
+              series={[
+                { key: "added", label: "Added", color: SERIES[0] },
+                { key: "submitted", label: "Submitted", color: SERIES[1] },
+                { key: "interviews", label: "Interviews", color: SERIES[2] },
+                { key: "contacts", label: "Contacts", color: SERIES[3] },
+              ]}
+            />
+          </ChartFrame>
+        ) : null}
+
+        {followUps.length || owedFeedback.length ? (
+          <div className="grid gap-5 lg:grid-cols-2">
+            {followUps.length ? (
+              <Card padded={false}>
+                <div className="p-5 pb-4">
+                  <CardHeader
+                    icon={<PhoneCall className="size-4" />}
+                    title="Follow-ups"
+                    description="Callbacks they promised when logging a conversation."
+                  />
+                </div>
+                <ul className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
+                  {followUps.map((f) => (
+                    <li key={f.id} className="flex items-center gap-3 px-5 py-3">
+                      <Link
+                        href={`/candidates/${f.candidateId}`}
+                        className="min-w-0 flex-1 text-[13px] font-medium text-content hover:text-brand"
+                      >
+                        {f.candidateName}
+                        <span className="ml-2 font-normal text-content-subtle">
+                          {f.subject || f.channel}
+                        </span>
+                      </Link>
+                      <span
+                        className={
+                          f.overdue
+                            ? "shrink-0 text-[11.5px] text-[hsl(var(--tone-rose))] tabular-nums"
+                            : "shrink-0 text-[11.5px] text-content-subtle tabular-nums"
+                        }
+                      >
+                        {formatDate(f.followUpAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ) : null}
+
+            {owedFeedback.length ? (
+              <Card padded={false}>
+                <div className="p-5 pb-4">
+                  <CardHeader
+                    icon={<Clock className="size-4" />}
+                    title="Scorecards they owe"
+                    description="Rounds they sat on where the feedback has not arrived."
+                  />
+                </div>
+                <ul className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
+                  {owedFeedback.map((f) => (
+                    <li key={f.interviewId} className="flex items-center gap-3 px-5 py-3">
+                      <Link
+                        href={`/candidates/${f.candidateId}`}
+                        className="min-w-0 flex-1 text-[13px] font-medium text-content hover:text-brand"
+                      >
+                        {f.firstName} {f.lastName}
+                        <span className="ml-2 font-normal text-content-subtle">{f.title}</span>
+                      </Link>
+                      <span className="shrink-0 font-mono text-[11px] text-content-subtle">
+                        {f.requisitionCode}
+                      </span>
+                      <span className="shrink-0 text-[11.5px] text-content-subtle tabular-nums">
+                        {formatDate(f.scheduledAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="grid gap-5 lg:grid-cols-3">
           <div className="space-y-5 lg:col-span-2">
