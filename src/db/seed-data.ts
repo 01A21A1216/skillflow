@@ -492,6 +492,57 @@ export const TEAM_SEEDS = [
   { name: "Quentin Oduya", role: "interviewer", title: "Senior Programme Manager", department: "Program Delivery", capacity: 0 },
 ] as const;
 
+export const CONTACT_TEMPLATES = [
+  {
+    channel: "call",
+    direction: "outbound",
+    subject: "Intro call",
+    body: "Walked through the role and the client. Comfortable with the onsite expectation, wants to understand the contract length before committing. Sending the JD across.",
+  },
+  {
+    channel: "call",
+    direction: "inbound",
+    subject: "Rate discussion",
+    body: "Called back about the rate. Currently on {rate}/hr elsewhere and would move for the right project. Flagged that they are interviewing in one other process.",
+  },
+  {
+    channel: "email",
+    direction: "outbound",
+    subject: "Submitting your profile",
+    body: "Confirmed in writing what we are putting forward and to which client. Asked them to hold the date range we discussed for the interview.",
+  },
+  {
+    channel: "email",
+    direction: "inbound",
+    subject: "Updated CV",
+    body: "Sent through an updated CV with the most recent implementation added. Asked when the client is likely to come back.",
+  },
+  {
+    channel: "linkedin",
+    direction: "outbound",
+    subject: "First approach",
+    body: "Reached out cold about the requirement. Open to a conversation but not actively looking — worth keeping warm rather than pushing.",
+  },
+  {
+    channel: "sms",
+    direction: "outbound",
+    subject: "Interview confirmation",
+    body: "Texted the joining link and the panel names ahead of the round. Confirmed received.",
+  },
+  {
+    channel: "call",
+    direction: "outbound",
+    subject: "Post-interview debrief",
+    body: "Their read on the round was positive. Some concern about the pace of the programme; reassured them the client has budget approved through the year.",
+  },
+  {
+    channel: "meeting",
+    direction: "outbound",
+    subject: "Coffee and briefing",
+    body: "Met in person before the client round. Went through the panel, the way they run the interview, and what they will probe hardest on.",
+  },
+] as const;
+
 export const NOTE_TEMPLATES = [
   "Spoke for 25 minutes. Strong on {skill}, motivated by scope rather than title. Flagged compensation expectations early.",
   "Left a voicemail and followed up by email. Candidate is interviewing in two other processes, so we should compress the loop.",

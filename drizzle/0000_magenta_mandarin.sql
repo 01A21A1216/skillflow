@@ -113,6 +113,22 @@ CREATE TABLE "clients" (
 	"row_version" integer DEFAULT 1 NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "communications" (
+	"id" text PRIMARY KEY NOT NULL,
+	"candidate_id" text NOT NULL,
+	"submission_id" text,
+	"channel" text NOT NULL,
+	"direction" text DEFAULT 'outbound' NOT NULL,
+	"subject" text DEFAULT '' NOT NULL,
+	"body" text DEFAULT '' NOT NULL,
+	"follow_up_at" timestamp with time zone,
+	"occurred_at" timestamp with time zone NOT NULL,
+	"logged_by_id" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"deleted_at" timestamp with time zone,
+	"deleted_by" text
+);
+--> statement-breakpoint
 CREATE TABLE "feedback" (
 	"id" text PRIMARY KEY NOT NULL,
 	"interview_id" text NOT NULL,
@@ -395,6 +411,9 @@ ALTER TABLE "candidate_experience" ADD CONSTRAINT "candidate_experience_candidat
 ALTER TABLE "candidates" ADD CONSTRAINT "candidates_referred_by_id_users_id_fk" FOREIGN KEY ("referred_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "candidates" ADD CONSTRAINT "candidates_owner_id_users_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "clients" ADD CONSTRAINT "clients_account_owner_id_users_id_fk" FOREIGN KEY ("account_owner_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "communications" ADD CONSTRAINT "communications_candidate_id_candidates_id_fk" FOREIGN KEY ("candidate_id") REFERENCES "public"."candidates"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "communications" ADD CONSTRAINT "communications_submission_id_submissions_id_fk" FOREIGN KEY ("submission_id") REFERENCES "public"."submissions"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "communications" ADD CONSTRAINT "communications_logged_by_id_users_id_fk" FOREIGN KEY ("logged_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "feedback" ADD CONSTRAINT "feedback_interview_id_interviews_id_fk" FOREIGN KEY ("interview_id") REFERENCES "public"."interviews"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "feedback" ADD CONSTRAINT "feedback_interviewer_id_users_id_fk" FOREIGN KEY ("interviewer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "feedback" ADD CONSTRAINT "feedback_template_id_scorecard_templates_id_fk" FOREIGN KEY ("template_id") REFERENCES "public"."scorecard_templates"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -434,6 +453,8 @@ CREATE INDEX "cand_owner_idx" ON "candidates" USING btree ("owner_id");--> state
 CREATE INDEX "cand_status_idx" ON "candidates" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "cand_deleted_idx" ON "candidates" USING btree ("deleted_at");--> statement-breakpoint
 CREATE INDEX "client_deleted_idx" ON "clients" USING btree ("deleted_at");--> statement-breakpoint
+CREATE INDEX "comm_candidate_idx" ON "communications" USING btree ("candidate_id");--> statement-breakpoint
+CREATE INDEX "comm_followup_idx" ON "communications" USING btree ("follow_up_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "feedback_unique_idx" ON "feedback" USING btree ("interview_id","interviewer_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "panel_unique_idx" ON "interview_panel" USING btree ("interview_id","user_id");--> statement-breakpoint
 CREATE INDEX "panel_feedback_idx" ON "interview_panel" USING btree ("feedback_status");--> statement-breakpoint

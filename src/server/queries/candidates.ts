@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, inArray, like, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, like, lte, or, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -8,6 +8,7 @@ import {
   candidateExperience,
   candidates,
   clients,
+  communications,
   feedback,
   interviewPanel,
   interviews,
@@ -295,6 +296,27 @@ export async function getCandidate(candidateId: string, actor?: User) {
 
   const files = await listAttachments("candidate", candidateId);
 
+  const contacts = (await db
+    .select({ comm: communications, loggedBy: users.name, code: requisitions.code })
+    .from(communications)
+    .innerJoin(users, eq(users.id, communications.loggedById))
+    .leftJoin(submissions, eq(submissions.id, communications.submissionId))
+    .leftJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
+    .where(and(eq(communications.candidateId, candidateId), isNull(communications.deletedAt)))
+    .orderBy(desc(communications.occurredAt))
+    ).map((r) => ({
+      id: r.comm.id,
+      channel: r.comm.channel,
+      direction: r.comm.direction,
+      subject: r.comm.subject,
+      body: r.comm.body,
+      occurredAt: r.comm.occurredAt,
+      followUpAt: r.comm.followUpAt,
+      loggedBy: r.loggedBy,
+      loggedById: r.comm.loggedById,
+      requisitionCode: r.code,
+    }));
+
   const candidateNotes = (await db
     .select({ note: notes, author: users })
     .from(notes)
@@ -322,6 +344,7 @@ export async function getCandidate(candidateId: string, actor?: User) {
     education,
     experience,
     attachments: files,
+    contacts,
     notes: candidateNotes,
     daysInSystem: daysBetween(candidate.createdAt),
   };

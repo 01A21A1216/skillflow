@@ -27,6 +27,7 @@ import {
   AGENDA_TEMPLATES,
   CANDIDATE_COMPANIES,
   CITIES,
+  CONTACT_TEMPLATES,
   DEGREES,
   EXPERIENCE_BLURBS,
   FIELDS_OF_STUDY,
@@ -97,6 +98,7 @@ const weighted = <T,>(entries: [T, number][]): T => {
 };
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 const NOW = new Date("2026-09-11T17:00:00Z").getTime();
 const daysAgo = (d: number) => NOW - d * DAY;
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -131,6 +133,7 @@ const feedbacks: (typeof s.feedback.$inferInsert)[] = [];
 const offers: (typeof s.offers.$inferInsert)[] = [];
 const notes: (typeof s.notes.$inferInsert)[] = [];
 const educationRows: (typeof s.candidateEducation.$inferInsert)[] = [];
+const contactRows: (typeof s.communications.$inferInsert)[] = [];
 const experienceRows: (typeof s.candidateExperience.$inferInsert)[] = [];
 const activities: (typeof s.activities.$inferInsert)[] = [];
 
@@ -1075,6 +1078,41 @@ function buildSubmission(
   }
 
   const who = `${candidate.firstName} ${candidate.lastName}`;
+
+  /* --- Contact history -------------------------------------------- *
+   * A desk logs the conversations that moved someone forward, not every
+   * one it had. Anchored to the stage timeline, so the log reads in step
+   * with the pipeline rather than alongside it.
+   * ---------------------------------------------------------------- */
+  if (kind !== "closed" || chance(0.3)) {
+    const conversations = sample(CONTACT_TEMPLATES, int(1, Math.min(4, furthest + 1)));
+    for (const [i, template] of conversations.entries()) {
+      const at = businessMoment(
+        Math.min(NOW - HOUR, enteredAt[Math.min(i, furthest)]! + int(1, 20) * HOUR),
+        8,
+        19,
+      );
+      if (at > NOW) continue;
+      contactRows.push({
+        id: id("com"),
+        candidateId: candidate.id,
+        submissionId,
+        channel: template.channel,
+        direction: template.direction,
+        subject: template.subject,
+        body: template.body.replace("{rate}", `$${int(62, 145)}`),
+        // A follow-up only on the most recent conversation, and only when the
+        // candidate is still live — chasing a closed-out one is noise.
+        followUpAt:
+          kind === "live" && i === conversations.length - 1 && chance(0.35)
+            ? new Date(businessMoment(daysAgo(-int(0, 6)), 9, 17))
+            : null,
+        occurredAt: new Date(at),
+        loggedById: owner,
+        createdAt: new Date(at),
+      });
+    }
+  }
   activity("submission", submissionId, "submission_created", owner, `${who} added to ${req.code}`, enteredAt[0]!, {
     requisitionId: req.id,
     candidateId: candidate.id,
@@ -1692,6 +1730,7 @@ async function main() {
   await insertAll(s.interviewPanel as never, panels, "panel members");
   await insertAll(s.feedback as never, feedbacks, "feedback");
   await insertAll(s.offers as never, offers, "offers");
+  await insertAll(s.communications as never, contactRows, "communications");
   await insertAll(s.notes as never, notes, "notes");
   await insertAll(s.activities as never, activities, "activities");
 

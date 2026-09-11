@@ -3,8 +3,10 @@ import { z } from "zod";
 import {
   AUTHORED_REQ_STATUSES,
   AVAILABILITIES,
+  CHANNELS,
   CANDIDATE_STATUSES,
   DECLINE_REASONS,
+  DIRECTIONS,
   EMPLOYMENT_TYPES,
   INTERVIEW_MODES,
   INTERVIEW_TYPES,
@@ -283,6 +285,22 @@ export const offerTransitionSchema = z.object({
     .enum(DECLINE_REASONS as unknown as [string, ...string[]])
     .optional()
     .or(z.literal("").transform(() => undefined)),
+});
+
+/* ------------------------------------------------------------------ *
+ * Communication
+ * ------------------------------------------------------------------ */
+
+export const communicationSchema = z.object({
+  candidateId: nonEmpty("Candidate"),
+  submissionId: optionalText(60),
+  channel: z.enum(values(CHANNELS)),
+  direction: z.enum(values(DIRECTIONS)).default("outbound"),
+  subject: optionalText(200),
+  body: nonEmpty("What was said", 4000),
+  /** Local datetime from the form; blank means it just happened. */
+  occurredAt: optionalText(40),
+  followUpAt: optionalText(40),
 });
 
 /* ------------------------------------------------------------------ *

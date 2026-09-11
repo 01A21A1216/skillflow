@@ -372,6 +372,43 @@ export const candidateExperience = pgTable(
 );
 
 /**
+ * Contact history with a candidate (§7).
+ *
+ * Logged by hand rather than synced: this application does not own anyone's
+ * mailbox, and pretending to a complete record it cannot have would be worse
+ * than an honest partial one. The integration ports (§22, item 4.4) are where
+ * a real mail or dialler feed would land, writing the same rows.
+ */
+export const communications = pgTable(
+  "communications",
+  {
+    id: pk(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => candidates.id, { onDelete: "cascade" }),
+    /** Optional: the requirement this conversation was about. */
+    submissionId: text("submission_id").references(() => submissions.id, { onDelete: "set null" }),
+    channel: text("channel").notNull(),
+    direction: text("direction").notNull().default("outbound"),
+    subject: text("subject").notNull().default(""),
+    body: text("body").notNull().default(""),
+    /** What happens next, if anything. Drives the follow-up queue. */
+    followUpAt: timestamp("follow_up_at", { withTimezone: true }),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    loggedById: text("logged_by_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: createdAt(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: text("deleted_by"),
+  },
+  (t) => [
+    index("comm_candidate_idx").on(t.candidateId),
+    index("comm_followup_idx").on(t.followUpAt),
+  ],
+);
+
+/**
  * Files attached to any record — resumes, job descriptions, client briefs.
  *
  * The bytes live behind a storage port (`src/server/storage.ts`), so this row

@@ -32,6 +32,7 @@ import {
   SubmissionStatusBadge,
 } from "@/components/domain/badges";
 import { AttachmentPanel } from "@/components/domain/attachment-panel";
+import { CommunicationLog } from "@/components/domain/communication-log";
 import { DuplicatePanel } from "@/components/domain/duplicate-panel";
 import { potentialDuplicates } from "@/server/queries/duplicates";
 import { EditCandidateButton } from "@/components/domain/forms/candidate-form";
@@ -91,6 +92,7 @@ export default async function CandidateDetailPage({
     education,
     experience,
     attachments,
+    contacts,
   } = detail;
   const name = `${c.firstName} ${c.lastName}`;
   const activity = await candidateActivity(c.id, 25);
@@ -434,13 +436,28 @@ export default async function CandidateDetailPage({
               </Card>
             ) : null}
 
-            {/* Files */}
+            <CommunicationLog
+              candidateId={c.id}
+              candidateName={name}
+              entries={contacts}
+              actorId={actor.id}
+              canLog={can(actor, "note.create")}
+              submissions={submissions.map(({ submission, requisition }) => ({
+                id: submission.id,
+                label: `${requisition.code} — ${requisition.title}`,
+              }))}
+            />
+
+            {/* Resume and other files */}
             <AttachmentPanel
               entityType="candidate"
               entityId={c.id}
               attachments={attachments}
               canUpload={can(actor, "attachment.upload")}
               canDelete={can(actor, "attachment.delete")}
+              kind="resume"
+              title="Resume and documents"
+              description="The CV the client sees, plus anything else worth keeping on file."
             />
 
             {/* Offers */}

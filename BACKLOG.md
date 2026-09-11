@@ -97,7 +97,7 @@ of code and into configuration.
 
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
-| 2.1 | **Resume upload** | §6 | ❌ | M | Depends on 0.8. |
+| 2.1 | **Resume upload** | §6 | ✅ | M | Done via the attachment store from 1.8 — the Candidate 360 has a "Resume and documents" panel, and downloads go through the permission-checked route. Parsing is 2.2. |
 | 2.2 | **Resume parsing → structured fields** | §6 | ❌ | L | Recruiter reviews and edits before save — never write parsed values silently. |
 | 2.3 | **Duplicate detection** | §6, §20 | ✅ | M | Done — email, plus-addressed mailbox, phone (last ten digits), LinkedIn, and name-with-employer-or-city, scored additively and reported with *reasons* rather than a similarity percentage. Creating a likely duplicate is stopped once with the names in front of you and goes through on a second submit; an exact email is still refused outright. The merge moves every submission, interview, scorecard, note, file and activity entry to the kept record and soft-deletes the other — nothing is deleted. 31 tests, weighted towards the near misses. |
 | 2.4 | **Notification centre** | §14 | ❌ | L | 13 trigger types. Build against a transport-agnostic interface so Teams/Slack/email drop in later without touching callers. |
@@ -106,7 +106,7 @@ of code and into configuration.
 | 2.7 | **Reports + CSV/Excel export** | §19 | ✅ | M | Done — `/reports` renders twelve reports and exports each as CSV from the *same definition*, so an export cannot drift from the table above it. Time-to-Interview added. The writer quotes properly and defuses formula injection; it has its own tests because every failure mode there is silent. Native `.xlsx` is deliberately not built: CSV opens in Excel and adding a spreadsheet library to emit one sheet is not worth the dependency. |
 | 2.8 | **Dashboard drill-down on every card** | §4 | ✅ | S | Done — the twelve tiles §4 names, in its order, each landing on the records it counted rather than on a chart of them. Four were missing (High priority, Interviews today, Feedback pending, Open over 15 days) and three linked to `/analytics`. The pipeline page gained stage and outcome filters to make the drill-downs real, and renders only the columns a filtered view is about. |
 | 2.9 | **Recruiter personal dashboard** | §12 | 🟡 | M | `/team/[id]` covers roughly half the specified metrics; missing sourced/screened counts, follow-ups due, activity trend. |
-| 2.10 | **Communication log on Candidate 360** | §7 | ❌ | M | |
+| 2.10 | **Communication log on Candidate 360** | §7 | ✅ | M | Done — calls, emails, LinkedIn, texts and meetings with direction, the requirement they were about, and an optional follow-up. Logging a contact moves `lastContactedAt`, so the log and the candidate list cannot disagree. Due follow-ups appear in the dashboard action queue, scoped to whoever made the promise. Logged by hand and labelled as such: this app does not own anyone's mailbox, and a complete-looking history it cannot guarantee would be worse than an honest partial one. |
 | 2.11 | **Demo data → Oracle/ERP domain** | §26 | ✅ | S | Done — twelve practice areas covering Oracle DBA / EBS / Fusion / OIC, SAP S/4HANA, Salesforce, .NET, data, cloud, security, QA and programme delivery. The desk, the client-side panels, the interview loops (which now include a client round) and the scorecards all moved with it. A requirement always requires its defining platform, and most candidates in a family hold it — without that, match scoring built on these skills would be noise. |
 
 ---

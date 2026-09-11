@@ -594,6 +594,30 @@ export function visaMatches(accepted: string[] | null | undefined, held: string)
 }
 
 /* ------------------------------------------------------------------ *
+ * Communication (§7)
+ * ------------------------------------------------------------------ */
+
+export type Channel = "call" | "email" | "linkedin" | "sms" | "meeting" | "other";
+
+export const CHANNELS: Meta<Channel>[] = [
+  { value: "call", label: "Call", tone: "blue" },
+  { value: "email", label: "Email", tone: "indigo" },
+  { value: "linkedin", label: "LinkedIn", tone: "cyan" },
+  { value: "sms", label: "Text", tone: "violet" },
+  { value: "meeting", label: "Meeting", tone: "emerald" },
+  { value: "other", label: "Other", tone: "slate" },
+];
+export const CHANNEL = index(CHANNELS);
+
+export type Direction = "outbound" | "inbound";
+
+export const DIRECTIONS: Meta<Direction>[] = [
+  { value: "outbound", label: "We contacted them", tone: "slate" },
+  { value: "inbound", label: "They contacted us", tone: "emerald" },
+];
+export const DIRECTION = index(DIRECTIONS);
+
+/* ------------------------------------------------------------------ *
  * Interviews
  * ------------------------------------------------------------------ */
 
@@ -851,6 +875,7 @@ export const ACTIVITY_TYPES = {
   offer_status: { label: "Offer status changed", tone: "amber" as Tone },
   note_added: { label: "Note added", tone: "slate" as Tone },
   attachment_added: { label: "File attached", tone: "cyan" as Tone },
+  contact_logged: { label: "Contact logged", tone: "cyan" as Tone },
   attachment_removed: { label: "File removed", tone: "slate" as Tone },
   settings_changed: { label: "Settings changed", tone: "violet" as Tone },
   signed_in: { label: "Signed in", tone: "neutral" as Tone },

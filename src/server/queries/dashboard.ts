@@ -1,9 +1,9 @@
 import "server-only";
 
-import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { activities, submissions, users } from "@/db/schema";
+import { activities, candidates, communications, submissions, users } from "@/db/schema";
 import type { User } from "@/db/schema";
 import { can, visibleRequisitionIds } from "@/server/authz";
 import { FEEDBACK_SLA_HOURS, type Stage } from "@/lib/domain";
@@ -329,7 +329,14 @@ async function stageTotals(cards: PipelineCard[]) {
 
 export interface ActionItem {
   id: string;
-  kind: "feedback" | "aging" | "offer_expiring" | "req_stalled" | "interview_today" | "no_pipeline";
+  kind:
+    | "feedback"
+    | "aging"
+    | "offer_expiring"
+    | "req_stalled"
+    | "interview_today"
+    | "no_pipeline"
+    | "follow_up";
   title: string;
   detail: string;
   href: string;
@@ -358,6 +365,22 @@ export async function actionQueue(limit = 12, actor?: User): Promise<ActionItem[
       tone: overdueDays > 4 ? "rose" : "amber",
       urgency: 100 + overdueDays * 2,
       meta: `${overdueDays}d overdue`,
+    });
+  }
+
+  // Follow-ups a recruiter set for themselves when logging a conversation.
+  // These outrank most things: somebody promised a candidate a callback.
+  for (const f of await dueFollowUps(actor)) {
+    const overdueDays = daysBetween(f.followUpAt);
+    items.push({
+      id: `fu-${f.id}`,
+      kind: "follow_up",
+      title: overdueDays > 0 ? "Follow-up overdue" : "Follow up today",
+      detail: `${f.candidateName} — ${f.subject || f.channel}`,
+      href: `/candidates/${f.candidateId}`,
+      tone: overdueDays > 2 ? "rose" : "amber",
+      urgency: 110 + overdueDays * 3,
+      meta: overdueDays > 0 ? `${overdueDays}d late` : "due today",
     });
   }
 
@@ -530,6 +553,48 @@ export async function candidateActivity(candidateId: string, limit = 40) {
     .orderBy(desc(activities.createdAt))
     .limit(limit)
     );
+}
+
+/**
+ * Follow-ups that have come due.
+ *
+ * Scoped to the actor's own commitments when they own a desk: a follow-up is a
+ * promise one person made, and putting everybody's in everybody's queue is how
+ * a queue stops being read.
+ */
+export async function dueFollowUps(actor?: User, withinHours = 0) {
+  const cutoff = new Date(Date.now() + withinHours * 3_600_000);
+
+  const rows = await db
+    .select({
+      id: communications.id,
+      candidateId: communications.candidateId,
+      firstName: candidates.firstName,
+      lastName: candidates.lastName,
+      subject: communications.subject,
+      channel: communications.channel,
+      followUpAt: communications.followUpAt,
+      loggedById: communications.loggedById,
+    })
+    .from(communications)
+    .innerJoin(candidates, eq(candidates.id, communications.candidateId))
+    .where(
+      and(
+        isNull(communications.deletedAt),
+        isNull(candidates.deletedAt),
+        isNotNull(communications.followUpAt),
+        lte(communications.followUpAt, cutoff),
+        actor ? eq(communications.loggedById, actor.id) : undefined,
+      ),
+    )
+    .orderBy(asc(communications.followUpAt))
+    .limit(20);
+
+  return rows.map((r) => ({
+    ...r,
+    followUpAt: r.followUpAt!,
+    candidateName: `${r.firstName} ${r.lastName}`,
+  }));
 }
 
 /** Requisitions ranked by how much they need a human today. */

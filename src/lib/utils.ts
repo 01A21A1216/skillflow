@@ -73,6 +73,17 @@ export function formatDate(value: Date | number | string | null | undefined, wit
  * Work history is stored to the month, not the day, because that is what a CV
  * actually says — parsing it into a full date would invent precision.
  */
+/**
+ * A `datetime-local` input value for a given instant, in the *viewer's* zone.
+ *
+ * `toISOString()` would hand back UTC and the field would show the wrong hour
+ * for everyone outside London.
+ */
+export function isoDateTimeLocal(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function formatMonth(value: string | null | undefined) {
   if (!value) return "—";
   const [year, month] = value.split("-").map(Number);

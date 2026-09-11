@@ -4,8 +4,10 @@ import { AlertTriangle, ArrowDown, ArrowUp, Minus } from "lucide-react";
 import {
   AVAILABILITY,
   CANDIDATE_STATUS,
+  CHANNEL,
   ACTIVITY_TYPES,
   CLIENT_TIER,
+  DIRECTION,
   FEEDBACK_STATUS,
   EMPLOYMENT_TYPE,
   INTERVIEW_MODE,
@@ -71,6 +73,8 @@ export const WorkAuthBadge = metaBadge(WORK_AUTHORIZATION as AnyMeta);
 export const SeniorityBadge = metaBadge(SENIORITY as AnyMeta);
 export const CandidateStatusBadge = metaBadge(CANDIDATE_STATUS as AnyMeta);
 export const AvailabilityBadge = metaBadge(AVAILABILITY as AnyMeta);
+export const ChannelBadge = metaBadge(CHANNEL as AnyMeta);
+export const DirectionBadge = metaBadge(DIRECTION as AnyMeta);
 export const RequisitionSourceBadge = metaBadge(REQUISITION_SOURCE as AnyMeta);
 export const FeedbackStatusBadge = metaBadge(FEEDBACK_STATUS as AnyMeta);
 export const SourceBadge = metaBadge(SOURCE as AnyMeta);
