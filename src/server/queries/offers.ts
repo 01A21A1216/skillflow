@@ -69,6 +69,10 @@ export async function listOffers(filters: OfferFilters = {}, actor?: User): Prom
 
   if (filters.status && filters.status !== "all") {
     if (filters.status === "open") conditions.push(inArray(offers.status, OPEN_STATUSES));
+    // The acceptance-rate tile drills to the offers it was calculated from,
+    // which is the answered ones — an offer still out is not a data point yet.
+    else if (filters.status === "responded")
+      conditions.push(inArray(offers.status, ["accepted", "declined"]));
     else conditions.push(eq(offers.status, filters.status));
   }
   if (filters.requisition && filters.requisition !== "all")

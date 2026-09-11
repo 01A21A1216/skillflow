@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { activities, submissions, users } from "@/db/schema";
 import type { User } from "@/db/schema";
 import { can, visibleRequisitionIds } from "@/server/authz";
-import type { Stage } from "@/lib/domain";
+import { FEEDBACK_SLA_HOURS, type Stage } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
 import { daysBetween, pct } from "@/lib/utils";
 import { funnel, monthlyTrend, timeToHire } from "./analytics";
@@ -74,6 +74,27 @@ export async function dashboardSnapshot(actor?: User) {
     )
     )[0]!.count;
 
+  const pipeline = await loadPipeline();
+
+  // Submissions that left the pipeline in the last 30 days, and the two stages
+  // §4 asks to report on separately from the board as a whole.
+  const closed30 = (await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(submissions)
+    .where(
+      and(
+        inArray(submissions.status, ["rejected", "withdrawn"]),
+        gte(submissions.stageSince, new Date(now - 30 * DAY)),
+      ),
+    )
+    )[0]!.count;
+
+  const selectedStages = pipeline.ofKind("offer");
+  const selectedCount = cards.filter((c) => selectedStages.includes(c.stage)).length;
+
+  const submittedStages = pipeline.ofKind("submitted");
+  const withClient = cards.filter((c) => submittedStages.includes(c.stage)).length;
+
   const reporting = actor ? can(actor, "report.view") : true;
   const ttf = await timeToHire();
   const responded = allOffers.filter((o) => ["accepted", "declined"].includes(o.status));
@@ -82,12 +103,33 @@ export async function dashboardSnapshot(actor?: User) {
     : 0;
 
   const agingCards = cards.filter((c) => c.isAging);
+  const highPriority = openReqs.filter((r) => ["critical", "high"].includes(r.priority));
+  const critical = openReqs.filter((r) => r.priority === "critical");
+  // §4 asks for requirements aging past 15 days specifically, which is a
+  // blunter question than the health verdict below and useful precisely
+  // because it is blunt.
+  const agingReqs = openReqs.filter((r) => r.ageDays > 15);
+  const atRisk = openReqs.filter((r) => ["at_risk", "stalled"].includes(requisitionHealth(r).key));
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date(startOfToday.getTime() + DAY);
+  const todayInterviews = upcoming.filter(
+    (i) => i.scheduledAt >= startOfToday && i.scheduledAt < endOfToday,
+  );
+
+  const feedbackDebt = await awaitingFeedback(undefined, actor);
+  const overdueFeedback = feedbackDebt.filter((r) => r.overdueBucket !== null).length;
+
   const openings = openReqs.reduce((s, r) => s + (r.openings - r.filled), 0);
 
   const allKpis: Kpi[] = [
+    // The twelve §4 names, in the order it names them. Each drills into the
+    // records it counts rather than into a chart of them — a number you cannot
+    // open is a number nobody trusts.
     {
       key: "reqs",
-      label: "Open requisitions",
+      label: "Open requirements",
       value: String(openReqs.length),
       raw: openReqs.length,
       hint: `${openings} seat${openings === 1 ? "" : "s"} still to fill`,
@@ -95,13 +137,40 @@ export async function dashboardSnapshot(actor?: User) {
       href: "/requisitions?status=active",
     },
     {
+      key: "priority",
+      label: "High priority",
+      value: String(highPriority.length),
+      raw: highPriority.length,
+      hint: `${critical.length} critical`,
+      tone: critical.length ? "rose" : "amber",
+      href: "/requisitions?status=active&priority=critical",
+    },
+    {
       key: "pipeline",
-      label: "Active pipeline",
+      label: "Active candidates",
       value: String(cards.length),
       raw: cards.length,
-      hint: `${agingCards.length} past the stage SLA`,
+      hint: `${agingCards.length} past the stage target`,
       tone: agingCards.length > cards.length * 0.3 ? "amber" : "blue",
       href: "/pipeline",
+    },
+    {
+      key: "submitted",
+      label: "With the client",
+      value: String(withClient),
+      raw: withClient,
+      hint: "Submitted or in client review",
+      tone: "blue",
+      href: `/pipeline?stage=${submittedStages[0] ?? "submitted"}`,
+    },
+    {
+      key: "interviews_today",
+      label: "Interviews today",
+      value: String(todayInterviews.length),
+      raw: todayInterviews.length,
+      hint: todayInterviews.length ? "Happening in the next few hours" : "Nothing booked for today",
+      tone: "violet",
+      href: "/interviews?window=today",
     },
     {
       key: "interviews",
@@ -113,6 +182,26 @@ export async function dashboardSnapshot(actor?: User) {
       href: "/interviews?window=week",
     },
     {
+      key: "feedback",
+      label: "Feedback pending",
+      value: String(feedbackDebt.length),
+      raw: feedbackDebt.length,
+      hint: overdueFeedback
+        ? `${overdueFeedback} past the ${FEEDBACK_SLA_HOURS}h SLA`
+        : "All inside the SLA",
+      tone: overdueFeedback ? "rose" : feedbackDebt.length ? "amber" : "emerald",
+      href: "/interviews?window=awaiting_feedback",
+    },
+    {
+      key: "selected",
+      label: "Selected",
+      value: String(selectedCount),
+      raw: selectedCount,
+      hint: "Chosen by the client, at or approaching offer",
+      tone: "amber",
+      href: `/pipeline?stage=${selectedStages[0] ?? "selected"}`,
+    },
+    {
       key: "offers",
       label: "Offers outstanding",
       value: String(extendedOffers.length),
@@ -122,8 +211,8 @@ export async function dashboardSnapshot(actor?: User) {
       href: "/offers?status=open",
     },
     {
-      key: "hires",
-      label: "Hires this quarter",
+      key: "joined",
+      label: "Joined this quarter",
       value: String(hiresQtd),
       raw: hiresQtd,
       // A percentage swing off a base of one or two is noise, not a signal.
@@ -131,8 +220,30 @@ export async function dashboardSnapshot(actor?: User) {
       deltaLabel: "vs prior 30 days",
       hint: `${hires30} in the last 30 days`,
       tone: "emerald",
-      href: "/analytics",
+      href: "/pipeline?status=hired",
     },
+    {
+      key: "rejected",
+      label: "Closed out (30 days)",
+      value: String(closed30),
+      raw: closed30,
+      hint: "Rejected or withdrawn",
+      tone: "blue",
+      href: "/pipeline?status=rejected",
+    },
+    {
+      key: "aging",
+      label: "Open over 15 days",
+      value: String(agingReqs.length),
+      raw: agingReqs.length,
+      hint: `${Math.round(pct(agingReqs.length, Math.max(1, openReqs.length)))}% of open requirements`,
+      tone: agingReqs.length > openReqs.length * 0.5 ? "amber" : "blue",
+      href: "/requisitions?status=active&sort=oldest",
+    },
+
+    // Beyond the twelve: two quality measures and the queue driver. These are
+    // the numbers a manager reads rather than works from, which is why they
+    // are gated on reporting.
     {
       key: "ttf",
       label: "Median time to fill",
@@ -140,7 +251,7 @@ export async function dashboardSnapshot(actor?: User) {
       raw: ttf.medianTimeToFill,
       hint: `Mean ${Math.round(ttf.avgTimeToFill)} days across ${ttf.timeToFillDays.length} hires`,
       tone: ttf.medianTimeToFill > 60 ? "amber" : "blue",
-      href: "/analytics",
+      href: "/reports",
     },
     {
       key: "acceptance",
@@ -149,28 +260,37 @@ export async function dashboardSnapshot(actor?: User) {
       raw: acceptance,
       hint: `${responded.filter((o) => o.status === "accepted").length} of ${responded.length} answered offers`,
       tone: acceptance >= 75 ? "emerald" : acceptance >= 60 ? "amber" : "rose",
-      href: "/offers",
+      href: "/offers?status=responded",
     },
     {
       key: "attention",
-      label: "Requisitions at risk",
-      value: String(openReqs.filter((r) => ["at_risk", "stalled"].includes(requisitionHealth(r).key)).length),
-      raw: openReqs.filter((r) => ["at_risk", "stalled"].includes(requisitionHealth(r).key)).length,
+      label: "Requirements at risk",
+      value: String(atRisk.length),
+      raw: atRisk.length,
       hint: "Stalled or past target with no loop",
-      tone: "rose",
+      tone: atRisk.length ? "rose" : "emerald",
       href: "/requisitions?health=at_risk",
     },
   ];
 
   // Tiles the actor has no permission to see are dropped server-side rather
   // than hidden in the markup.
-  const REPORTING_TILES = new Set(["hires", "ttf", "acceptance"]);
+  const REPORTING_TILES = new Set(["ttf", "acceptance"]);
+  const PIPELINE_TILES = new Set([
+    "reqs",
+    "pipeline",
+    "attention",
+    "submitted",
+    "selected",
+    "joined",
+    "rejected",
+  ]);
   const kpis = allKpis.filter((k) => {
     if (REPORTING_TILES.has(k.key) && !reporting) return false;
     if (k.key === "offers" && actor && !can(actor, "offer.view")) return false;
-    if (k.key === "reqs" && actor && !can(actor, "requisition.view.assigned")) return false;
-    if (k.key === "pipeline" && actor && !can(actor, "requisition.view.assigned")) return false;
-    if (k.key === "attention" && actor && !can(actor, "requisition.view.assigned")) return false;
+    if (PIPELINE_TILES.has(k.key) && actor && !can(actor, "requisition.view.assigned")) {
+      return false;
+    }
     return true;
   });
 

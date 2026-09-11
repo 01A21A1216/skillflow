@@ -35,11 +35,18 @@ export function PipelineBoard({
   cards,
   requiredSkills,
   compact = false,
+  columns: columnKeys,
 }: {
   cards: PipelineCard[];
   /** Highlighted on cards when viewing a single requisition. */
   requiredSkills?: string[];
   compact?: boolean;
+  /**
+   * Which columns to render. Defaults to the live board; a drill-down from a
+   * KPI passes the one stage, or the terminal stage, it is actually about —
+   * nine empty columns beside one full one is not a useful answer.
+   */
+  columns?: Stage[];
 }) {
   const toast = useToast();
   const pipeline = usePipeline();
@@ -58,15 +65,20 @@ export function PipelineBoard({
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
 
+  const shown = useMemo(
+    () => columnKeys ?? pipeline.active,
+    [columnKeys, pipeline],
+  );
+
   const columns = useMemo(() => {
     const map = new Map<Stage, PipelineCard[]>();
-    for (const stage of pipeline.active) map.set(stage, []);
+    for (const stage of shown) map.set(stage, []);
     for (const card of optimistic) map.get(card.stage)?.push(card);
     for (const list of map.values()) {
       list.sort((a, b) => b.daysInStage - a.daysInStage || b.matchScore - a.matchScore);
     }
     return map;
-  }, [optimistic, pipeline]);
+  }, [optimistic, shown]);
 
   function onDragStart(event: DragStartEvent) {
     setDragging(optimistic.find((c) => c.id === event.active.id) ?? null);
@@ -96,7 +108,7 @@ export function PipelineBoard({
   return (
     <DndContext id="pipeline-board" sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="flex gap-3 overflow-x-auto pb-2">
-        {pipeline.active.map((stage) => (
+        {shown.map((stage) => (
           <Column
             key={stage}
             stage={stage}

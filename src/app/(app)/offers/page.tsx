@@ -33,6 +33,9 @@ const TABS = [
   { value: "pending_approval", label: "Awaiting approval" },
   { value: "accepted", label: "Accepted" },
   { value: "declined", label: "Declined" },
+  // The acceptance-rate tile drills here: the offers the rate was computed
+  // from, rather than every offer ever drafted.
+  { value: "responded", label: "Answered" },
   { value: "all", label: "Everything" },
 ];
 
@@ -89,7 +92,9 @@ export default async function OffersPage({
                   ? stats.open
                   : t.value === "all"
                     ? all.length
-                    : counts[t.value],
+                    : t.value === "responded"
+                      ? (counts.accepted ?? 0) + (counts.declined ?? 0)
+                      : counts[t.value],
             }))}
           />
         }

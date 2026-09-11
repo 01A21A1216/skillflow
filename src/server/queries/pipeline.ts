@@ -30,6 +30,14 @@ export interface PipelineFilters {
   department?: string;
   priority?: string;
   aging?: string;
+  /** One stage, for drilling in from a dashboard tile or a funnel bar. */
+  stage?: string;
+  /**
+   * Submission status. Defaults to `active` — the board is a live board — but
+   * the same query backs the closed-out record lists a KPI drills into, which
+   * is why it is a filter rather than a constant.
+   */
+  status?: string;
 }
 
 export interface PipelineCard {
@@ -65,10 +73,20 @@ export interface PipelineCard {
 /** Every live card in the funnel, ready to be bucketed by stage. */
 export async function pipelineCards(filters: PipelineFilters = {}, actor?: User): Promise<PipelineCard[]> {
   const pipeline = await loadPipeline();
-  const conditions = [
-    eq(submissions.status, "active"),
-    inArray(submissions.stage, pipeline.active),
-  ];
+  const status = filters.status ?? "active";
+  const conditions =
+    status === "all"
+      ? [sql`true`]
+      : [eq(submissions.status, status)];
+
+  // A live board only shows live stages; a closed-out list shows wherever
+  // people actually stopped, which is the whole point of looking at it.
+  if (status === "active" && !filters.stage) {
+    conditions.push(inArray(submissions.stage, pipeline.active));
+  }
+  if (filters.stage && filters.stage !== "all") {
+    conditions.push(eq(submissions.stage, filters.stage));
+  }
 
   if (actor) {
     const scope = await submissionScope(actor);

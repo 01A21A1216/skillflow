@@ -42,6 +42,9 @@ const ACTION_TONE = {
   violet: "violet",
 } as const;
 
+/** Tiles where a rising number is bad news, so the trend arrow reads correctly. */
+const BAD_WHEN_UP = new Set(["ttf", "attention", "aging", "rejected", "feedback"]);
+
 export default async function DashboardPage() {
   const actor = await requireUser();
   const pipeline = await loadPipeline();
@@ -113,7 +116,7 @@ export default async function DashboardPage() {
               tone={k.tone}
               delta={k.delta}
               deltaLabel={k.deltaLabel}
-              goodWhenUp={k.key !== "ttf" && k.key !== "attention"}
+              goodWhenUp={!BAD_WHEN_UP.has(k.key)}
               href={k.href}
             />
           ))}

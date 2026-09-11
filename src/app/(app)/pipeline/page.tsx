@@ -36,6 +36,8 @@ export default async function PipelinePage({
     department: get("department"),
     priority: get("priority"),
     aging: get("aging"),
+    stage: get("stage"),
+    status: get("status"),
   };
 
   const actor = await requirePermission("requisition.view.assigned");
@@ -45,6 +47,22 @@ export default async function PipelinePage({
   const openReqs = await listRequisitions({ status: "active", sort: "pipeline" }, actor);
   const people = await listUsers();
 
+  // Which columns this view is about. A drill-down from a KPI is asking about
+  // one stage or one outcome, and nine empty columns beside one full one is
+  // not a useful answer to that.
+  const status = filters.status ?? "active";
+  const columns =
+    filters.stage && filters.stage !== "all"
+      ? [filters.stage]
+      : status === "active"
+        ? pipeline.active
+        : status === "hired"
+          ? pipeline.ofKind("placement")
+          : status === "all"
+            ? pipeline.order
+            : [status];
+
+  const live = status === "active";
   const aging = cards.filter((c) => c.isAging).length;
   const stageCounts = new Map<string, number>();
   for (const c of cards) stageCounts.set(c.stage, (stageCounts.get(c.stage) ?? 0) + 1);
@@ -125,6 +143,25 @@ export default async function PipelinePage({
               allLabel: "All ages",
               options: [{ value: "yes", label: "Past stage target only" }],
             },
+            {
+              name: "stage",
+              label: "Stage",
+              allLabel: "Every stage",
+              width: "w-auto min-w-[12rem]",
+              options: pipeline.live.map((st) => ({ value: st.key, label: st.label })),
+            },
+            {
+              name: "status",
+              label: "Outcome",
+              allLabel: "Live only",
+              options: [
+                { value: "hired", label: "Joined" },
+                { value: "rejected", label: "Rejected" },
+                { value: "withdrawn", label: "Withdrawn" },
+                { value: "on_hold", label: "On hold" },
+                { value: "all", label: "Everything" },
+              ],
+            },
           ]}
         />
 
@@ -132,7 +169,7 @@ export default async function PipelinePage({
           <div className="card">
             <EmptyState
               icon={<KanbanSquare className="size-5" />}
-              title="No live candidates match these filters"
+              title="No candidates match these filters"
               description="Clear a filter, or add candidates to a requisition from the candidates list."
             />
           </div>
@@ -146,14 +183,16 @@ export default async function PipelinePage({
                 .filter((p) => ["recruiter", "recruitment_manager", "super_admin"].includes(p.role))
                 .map((p) => ({ id: p.id, name: p.name, title: p.title })),
               capabilities: {
-                move: can(actor, "submission.move"),
+                // A closed-out candidate is not dragged between columns;
+                // reopening them is a decision, not a drag.
+                move: live && can(actor, "submission.move"),
                 close: can(actor, "submission.close"),
                 schedule: can(actor, "interview.schedule"),
                 draftOffer: can(actor, "offer.create"),
               },
             }}
           >
-            <PipelineBoard cards={cards} />
+            <PipelineBoard cards={cards} columns={columns} />
           </PipelineOptionsProvider>
         )}
 

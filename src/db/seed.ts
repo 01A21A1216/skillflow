@@ -1463,7 +1463,13 @@ for (const plan of reqPlans) {
           ? int(0, 2)
           : status === "on_hold"
             ? int(2, 5)
-            : int(5, 13);
+            // Roughly one open requirement in six is genuinely in trouble:
+            // nobody live on it, or a pipeline too thin to fill from. Without
+            // them "requirements at risk" reads zero and the action queue has
+            // nothing to be urgent about, which is not what a desk looks like.
+            : chance(0.17)
+              ? int(0, 2)
+              : int(5, 13);
 
   for (let h = 0; h < hiresTarget; h += 1) buildSubmission(ctx, "hired", budget);
   for (let l = 0; l < liveTarget; l += 1) buildSubmission(ctx, "live", budget);
