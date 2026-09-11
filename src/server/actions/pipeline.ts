@@ -8,6 +8,7 @@ import { candidates, notes, requisitions, stageEvents, submissions } from "@/db/
 import type { User } from "@/db/schema";
 import { isTerminal, type Pipeline, type Stage } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
+import { backfillPath, requisitionFill } from "@/server/rules";
 import {
   addToPipelineSchema,
   holdSchema,
@@ -48,19 +49,16 @@ async function syncRequisitionFill(requisitionId: string) {
     .where(and(eq(submissions.requisitionId, requisitionId), eq(submissions.status, "hired")))
     )[0]!.count;
 
-  const filled = Math.min(hires, req.openings);
-  const shouldClose = hires >= req.openings;
-  // Only an authored status may be overwritten here; the four derived ones are
-  // never stored, so there is nothing on the row to collide with.
-  const isOpenish = ["open", "on_hold", "draft"].includes(req.status);
+  const next = requisitionFill({
+    hires,
+    openings: req.openings,
+    status: req.status,
+    closedAt: req.closedAt,
+    today: new Date().toISOString().slice(0, 10),
+  });
 
   (await db.update(requisitions)
-    .set({
-      filled,
-      status: shouldClose && isOpenish ? "filled" : !shouldClose && req.status === "filled" ? "open" : req.status,
-      closedAt: shouldClose ? (req.closedAt ?? new Date().toISOString().slice(0, 10)) : null,
-      updatedAt: new Date(),
-    })
+    .set({ ...next, updatedAt: new Date() })
     .where(eq(requisitions.id, requisitionId))
     );
 }
@@ -143,7 +141,7 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
 
     // Backfill the stages this candidate is being dropped past, so funnel
     // analytics and the timeline stay consistent.
-    const path = pipeline.order.slice(0, pipeline.index(stage) + 1);
+    const path = backfillPath(pipeline, stage);
     for (const [i, s] of path.entries()) {
       (await tx.insert(stageEvents)
         .values({

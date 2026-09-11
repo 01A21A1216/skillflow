@@ -1,12 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { candidates, offers, requisitions, stageEvents, submissions } from "@/db/schema";
 import type { User } from "@/db/schema";
-import { OFFER_STATUS, OFFER_TRANSITIONS, type OfferStatus } from "@/lib/domain";
+import { OFFER_STATUS, type OfferStatus } from "@/lib/domain";
+import { offerTransitionError, requisitionFill } from "@/server/rules";
 import { offerSchema, offerTransitionSchema } from "@/lib/validation";
 import { can, canTouchRequisition } from "@/server/authz";
 import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
@@ -196,22 +197,16 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
   const from = offer.status as OfferStatus;
   const to = status as OfferStatus;
 
-  if (!OFFER_TRANSITIONS[from]?.includes(to)) {
-    return fail(
-      `Cannot move an offer from ${OFFER_STATUS[from].label.toLowerCase()} to ${OFFER_STATUS[to].label.toLowerCase()}.`,
-    );
-  }
-  if (to === "declined" && !declineReason) {
-    return fail("Pick a reason so we can learn from it.", { declineReason: "Reason required" });
-  }
-
   const ctx = await context(offer.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
   if (!await canTouchRequisition(actor, ctx.requisition.id)) return denied("that offer");
-  // Approval is a separate permission from progressing an offer: a recruiter
-  // may extend and record a response, but must not sign off their own terms.
-  if (to === "approved" && !can(actor, "offer.approve")) {
-    return fail("Only a hiring manager or recruitment manager can approve an offer.");
+
+  const refusal = offerTransitionError(from, to, {
+    declineReason,
+    canApprove: can(actor, "offer.approve"),
+  });
+  if (refusal) {
+    return fail(refusal, to === "declined" ? { declineReason: "Reason required" } : undefined);
   }
 
   const now = new Date();
@@ -280,23 +275,27 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
     }
   });
 
-  if (to === "accepted") {
+  // Both acceptance and its undoing change the seat count, and both used to be
+  // handled differently — a rescinded hire left the requirement marked Filled
+  // with a close date and the seat never came back.
+  if (["accepted", "rescinded"].includes(to)) {
     const req = (await db.select().from(requisitions).where(eq(requisitions.id, ctx.requisition.id)))[0];
     if (req) {
       const hires = (await db
-        .select()
+        .select({ count: sql<number>`count(*)::int` })
         .from(submissions)
-        .where(eq(submissions.requisitionId, req.id))
-        )
-        .filter((s) => s.status === "hired").length;
+        .where(and(eq(submissions.requisitionId, req.id), eq(submissions.status, "hired")))
+        )[0]!.count;
 
-      const filled = Math.min(hires, req.openings);
       (await db.update(requisitions)
         .set({
-          filled,
-          status: hires >= req.openings && ["open", "on_hold", "draft"].includes(req.status) ? "filled" : req.status,
-          closedAt:
-            hires >= req.openings ? (req.closedAt ?? now.toISOString().slice(0, 10)) : req.closedAt,
+          ...requisitionFill({
+            hires,
+            openings: req.openings,
+            status: req.status,
+            closedAt: req.closedAt,
+            today: now.toISOString().slice(0, 10),
+          }),
           updatedAt: now,
         })
         .where(eq(requisitions.id, req.id))

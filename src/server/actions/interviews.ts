@@ -19,12 +19,11 @@ import {
   FEEDBACK_SLA_HOURS,
   INTERVIEW_TYPE,
   PENDING_INTERVIEW_STATUSES,
-  RECOMMENDATION_SCORE,
   type InterviewStatus,
   type InterviewType,
-  type Recommendation,
 } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
+import { nextInterviewStage, settleOutcome } from "@/server/rules";
 import {
   declineFeedbackSchema,
   feedbackSchema,
@@ -78,13 +77,11 @@ async function syncInterviewStage(submissionId: string, actorId: string) {
   const awaiting = live.some((r) => r.status === "scheduled" && r.scheduledAt.getTime() > Date.now());
   const owing = live.some((r) => r.status === "completed" && r.feedbackCount < r.panelSize);
 
-  // The three readings of the same facts, resolved against whatever the
-  // configured pipeline calls them. A pipeline with fewer interview stages
-  // simply lands everyone on the ones it has.
-  const band = pipeline.ofKind("interviewing");
-  const next =
-    (awaiting ? band[0] : owing ? (band[2] ?? band[band.length - 1]) : (band[1] ?? band[0])) ??
-    current.stage;
+  const next = nextInterviewStage(
+    pipeline.ofKind("interviewing"),
+    { awaiting, owing },
+    current.stage,
+  );
 
   if (next === current.stage) return;
 
@@ -395,14 +392,10 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
     )
     )[0]!.count;
 
-  if (outstanding === 0 && all.length) {
-    const score =
-      all.reduce((sum, f) => sum + (RECOMMENDATION_SCORE[f.recommendation as Recommendation] ?? 0), 0) /
-      all.length;
+  const settled =
+    outstanding === 0 ? settleOutcome(all.map((f) => f.recommendation)) : null;
 
-    const settled =
-      score >= 1.5 ? "strong_yes" : score >= 0.75 ? "yes" : score > 0 ? "lean_yes" : score > -1 ? "lean_no" : score > -1.75 ? "no" : "strong_no";
-
+  if (settled) {
     (await db.update(interviews)
       .set({ status: "completed", outcome: settled, updatedAt: now })
       .where(eq(interviews.id, input.interviewId))
