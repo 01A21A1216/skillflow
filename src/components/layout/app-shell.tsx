@@ -13,6 +13,7 @@ import {
   KanbanSquare,
   LayoutDashboard,
   Menu,
+  Settings,
   Users,
   UsersRound,
   X,
@@ -76,6 +77,7 @@ const NAV_SECONDARY = [
   { href: "/analytics", label: "Analytics", icon: BarChart3, anyOf: ["report.view"] },
   { href: "/clients", label: "Client accounts", icon: Building2, anyOf: ["client.view"] },
   { href: "/team", label: "Team", icon: UsersRound, anyOf: ["team.view"] },
+  { href: "/settings", label: "Settings", icon: Settings, anyOf: ["settings.manage"] },
 ];
 
 export function AppShell({

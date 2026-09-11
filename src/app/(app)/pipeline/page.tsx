@@ -6,7 +6,8 @@ import { FilterBar } from "@/components/domain/filter-bar";
 import { PipelineBoard } from "@/components/domain/pipeline-board";
 import { PipelineOptionsProvider } from "@/components/domain/pipeline-actions";
 import { EmptyState } from "@/components/ui/empty-state";
-import { PRIORITIES, STAGE, STAGE_SLA_DAYS, type Stage } from "@/lib/domain";
+import { PRIORITIES } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { formatNumber, pluralize } from "@/lib/utils";
 import { pipelineCards, type PipelineFilters } from "@/server/queries/pipeline";
 import { listRequisitions, requisitionFacets } from "@/server/queries/requisitions";
@@ -38,13 +39,14 @@ export default async function PipelinePage({
   };
 
   const actor = await requirePermission("requisition.view.assigned");
+  const pipeline = await loadPipeline();
   const cards = await pipelineCards(filters, actor);
   const facets = await requisitionFacets();
   const openReqs = await listRequisitions({ status: "active", sort: "pipeline" }, actor);
   const people = await listUsers();
 
   const aging = cards.filter((c) => c.isAging).length;
-  const stageCounts = new Map<Stage, number>();
+  const stageCounts = new Map<string, number>();
   for (const c of cards) stageCounts.set(c.stage, (stageCounts.get(c.stage) ?? 0) + 1);
 
   return (
@@ -71,11 +73,11 @@ export default async function PipelinePage({
               </span>
             ) : null}
             <span className="hidden items-center gap-3 text-content-subtle sm:flex">
-              {(Object.keys(STAGE_SLA_DAYS) as Stage[])
-                .filter((s) => STAGE_SLA_DAYS[s] > 0)
+              {pipeline.live
+                .filter((s) => s.slaDays > 0)
                 .map((s) => (
-                  <span key={s} title={`Target time in ${STAGE[s].label.toLowerCase()}`}>
-                    {STAGE[s].label} {STAGE_SLA_DAYS[s]}d
+                  <span key={s.key} title={`Target time in ${s.label.toLowerCase()}`}>
+                    {s.label} {s.slaDays}d
                   </span>
                 ))}
             </span>

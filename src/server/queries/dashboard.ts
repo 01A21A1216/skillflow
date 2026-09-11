@@ -6,7 +6,8 @@ import { db } from "@/db";
 import { activities, submissions, users } from "@/db/schema";
 import type { User } from "@/db/schema";
 import { can, visibleRequisitionIds } from "@/server/authz";
-import { ACTIVE_STAGES, STAGE_SLA_DAYS, type Stage } from "@/lib/domain";
+import type { Stage } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { daysBetween, pct } from "@/lib/utils";
 import { funnel, monthlyTrend, timeToHire } from "./analytics";
 import { awaitingFeedback, listInterviews } from "./interviews";
@@ -185,20 +186,21 @@ export async function dashboardSnapshot(actor?: User) {
     openOffers,
     funnel: reporting ? await funnel(new Date(now - 180 * DAY)) : [],
     trend: reporting ? await monthlyTrend(12) : [],
-    stageTotals: stageTotals(cards),
+    stageTotals: await stageTotals(cards),
   };
 }
 
-function stageTotals(cards: PipelineCard[]) {
+async function stageTotals(cards: PipelineCard[]) {
   const totals = new Map<Stage, { count: number; aging: number }>();
-  for (const stage of ACTIVE_STAGES) totals.set(stage, { count: 0, aging: 0 });
+  const pipeline = await loadPipeline();
+  for (const stage of pipeline.active) totals.set(stage, { count: 0, aging: 0 });
   for (const c of cards) {
     const entry = totals.get(c.stage);
     if (!entry) continue;
     entry.count += 1;
     if (c.isAging) entry.aging += 1;
   }
-  return [...totals.entries()].map(([stage, v]) => ({ stage, ...v, sla: STAGE_SLA_DAYS[stage] }));
+  return [...totals.entries()].map(([stage, v]) => ({ stage, ...v, sla: pipeline.sla(stage) }));
 }
 
 /* ------------------------------------------------------------------ *

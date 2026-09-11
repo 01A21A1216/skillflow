@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Send } from "lucide-react";
 
-import { PIPELINE_STAGES } from "@/lib/domain";
+import { usePipeline } from "../pipeline-context";
 import { addToPipeline } from "@/server/actions/pipeline";
 import { addNote } from "@/server/actions/misc";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ export function AddToPipelineButton({
   requisitions: { id: string; code: string; title: string; clientName: string }[];
 }) {
   const router = useRouter();
+  const pipeline = usePipeline();
   const [open, setOpen] = useState(false);
 
   return (
@@ -72,10 +73,10 @@ export function AddToPipelineButton({
               hint="Earlier stages are backfilled so funnel analytics stay accurate."
               error={errors.stage}
             >
-              <Select name="stage" defaultValue="new">
-                {PIPELINE_STAGES.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
+              <Select name="stage" defaultValue={pipeline.order[0]}>
+                {pipeline.active.map((key) => (
+                  <option key={key} value={key}>
+                    {pipeline.label(key)}
                   </option>
                 ))}
               </Select>

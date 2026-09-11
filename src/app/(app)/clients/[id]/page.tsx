@@ -16,7 +16,8 @@ import { Avatar, UserChip } from "@/components/ui/avatar";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SegmentBar } from "@/components/ui/misc";
-import { PROGRESS_BUCKETS, bucketStages } from "@/lib/domain";
+import { PROGRESS_BUCKETS } from "@/lib/domain";
+import { bucketStages, loadPipeline } from "@/server/pipeline";
 import { formatDate, formatRange, pluralize } from "@/lib/utils";
 import { getClient } from "@/server/queries/people";
 import {
@@ -45,6 +46,7 @@ export default async function ClientDetailPage({
 }) {
   const { id } = await params;
   const actor = await requirePermission("client.view");
+  const pipeline = await loadPipeline();
   const detail = await getClient(id);
   if (!detail) notFound();
 
@@ -160,7 +162,7 @@ export default async function ClientDetailPage({
                                 height={5}
                                 segments={PROGRESS_BUCKETS.map((b) => ({
                                   label: b.label,
-                                  value: bucketStages(stages)[b.key],
+                                  value: bucketStages(pipeline, stages)[b.key],
                                   tone: b.tone,
                                 }))}
                               />

@@ -9,7 +9,10 @@ import {
   feedback,
   interviewPanel,
   interviews,
+  permissions,
   requisitions,
+  rolePermissions,
+  roles,
   submissions,
   users,
 } from "@/db/schema";
@@ -218,4 +221,28 @@ export async function getClient(clientId: string) {
     );
 
   return { client, owner, requisitions: reqs };
+}
+
+/**
+ * The permission matrix as it stands in the database.
+ *
+ * Read from rows rather than from `src/lib/permissions.ts`, because the rows
+ * are what `can()` actually consults at runtime — showing the constant would
+ * be showing what the matrix was seeded as, not what it is.
+ */
+export async function permissionMatrixView() {
+  const roleRows = await db.select().from(roles).orderBy(asc(roles.rank));
+  const permissionRows = await db.select().from(permissions).orderBy(asc(permissions.category), asc(permissions.label));
+  const grants = await db.select().from(rolePermissions);
+
+  return {
+    roles: roleRows.map((r) => ({ key: r.key, label: r.label })),
+    permissions: permissionRows.map((p) => ({
+      key: p.key,
+      label: p.label,
+      description: p.description,
+      category: p.category,
+    })),
+    granted: new Set(grants.map((g) => `${g.roleKey}|${g.permissionKey}`)),
+  };
 }

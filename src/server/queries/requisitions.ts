@@ -16,10 +16,8 @@ import {
   users,
 } from "@/db/schema";
 import {
-  ACTIVE_STAGES,
   EMPTY_STAGE_COUNTS,
   PRIORITY_WEIGHT,
-  progressBucket,
   requisitionProgress,
   type Priority,
   type ReqStatus,
@@ -29,6 +27,7 @@ import {
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { requisitionScope, visibleRequisitionIds } from "@/server/authz";
+import { loadPipeline } from "@/server/pipeline";
 import { listAttachments } from "@/server/queries/attachments";
 
 export interface RequisitionFilters {
@@ -91,7 +90,7 @@ export interface RequisitionRow {
   daysToTarget: number | null;
 }
 
-const ACTIVE_SET = ACTIVE_STAGES as readonly string[];
+
 
 const DERIVED_STATUSES: string[] = ["active_sourcing", "candidate_submitted", "interviewing", "offer"];
 
@@ -111,6 +110,9 @@ async function pipelineCounts() {
     .groupBy(submissions.requisitionId, submissions.stage, submissions.status)
     );
 
+  const pipeline = await loadPipeline();
+  const activeSet = new Set(pipeline.active);
+
   interface Counts extends StageCounts {
     active: number;
     hired: number;
@@ -122,10 +124,10 @@ async function pipelineCounts() {
   for (const r of rows) {
     const entry = map.get(r.requisitionId) ?? blank();
     entry.total += r.count;
-    if (r.status === "active" && ACTIVE_SET.includes(r.stage)) {
+    if (r.status === "active" && activeSet.has(r.stage)) {
       entry.active += r.count;
       // Eleven stages collapse into the four the requirement card reports on.
-      const bucket = progressBucket(r.stage as Stage);
+      const bucket = pipeline.bucket(r.stage) as keyof StageCounts | null;
       if (bucket) entry[bucket] += r.count;
     }
     if (r.status === "hired") entry.hired += r.count;

@@ -15,7 +15,8 @@ import {
   submissions,
   users,
 } from "@/db/schema";
-import { PIPELINE_STAGES, STAGE_ORDER, type Stage } from "@/lib/domain";
+import type { Stage } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { average, daysBetween, median, pct } from "@/lib/utils";
 
 const DAY = 86_400_000;
@@ -48,7 +49,13 @@ export interface FunnelStep {
   label: string;
   count: number;
   /** Conversion from the previous step. */
-  stepConversion: number;
+  /**
+   * Percentage of the previous stage that reached this one, or null when the
+   * previous stage is empty — a conversion out of nothing is not 0%, it is a
+   * figure that does not exist, and printing 0% next to a stage people plainly
+   * reached reads as a bug.
+   */
+  stepConversion: number | null;
   /** Conversion from the top of the funnel. */
   overallConversion: number;
   dropOff: number;
@@ -63,16 +70,17 @@ export async function funnel(since?: Date): Promise<FunnelStep[]> {
     );
 
   const byStage = new Map(rows.map((r) => [r.stage, r.count]));
-  const top = byStage.get(PIPELINE_STAGES[0]!.value) ?? 0;
+  const pipeline = await loadPipeline();
+  const top = byStage.get(pipeline.order[0]!) ?? 0;
 
-  return PIPELINE_STAGES.map((meta, i) => {
-    const count = byStage.get(meta.value) ?? 0;
-    const prev = i === 0 ? count : (byStage.get(PIPELINE_STAGES[i - 1]!.value) ?? 0);
+  return pipeline.live.map((meta, i) => {
+    const count = byStage.get(meta.key) ?? 0;
+    const prev = i === 0 ? count : (byStage.get(pipeline.live[i - 1]!.key) ?? 0);
     return {
-      stage: meta.value,
+      stage: meta.key,
       label: meta.label,
       count,
-      stepConversion: prev ? pct(count, prev) : 0,
+      stepConversion: i === 0 ? null : prev ? pct(count, prev) : null,
       overallConversion: top ? pct(count, top) : 0,
       dropOff: Math.max(0, prev - count),
     };
@@ -123,16 +131,18 @@ export async function stageVelocity(since?: Date): Promise<StageVelocity[]> {
     prev = { stage: e.toStage, at: e.createdAt.getTime() };
   }
 
-  return PIPELINE_STAGES.filter((s) => s.value !== "joined").map((meta) => {
-    const values = durations.get(meta.value) ?? [];
-    return {
-      stage: meta.value,
-      label: meta.label,
-      avgDays: average(values),
-      medianDays: median(values),
-      samples: values.length,
-    };
-  });
+  return (await loadPipeline()).live
+    .filter((s) => s.kind !== "placement")
+    .map((meta) => {
+      const values = durations.get(meta.key) ?? [];
+      return {
+        stage: meta.key,
+        label: meta.label,
+        avgDays: average(values),
+        medianDays: median(values),
+        samples: values.length,
+      };
+    });
 }
 
 export interface TimeToHire {
@@ -708,7 +718,7 @@ export async function pipelineAging() {
 
   return {
     buckets,
-    byStage: STAGE_ORDER.map((stage) => ({
+    byStage: (await loadPipeline()).order.map((stage) => ({
       stage,
       count: byStage.get(stage)?.length ?? 0,
       avgDays: average(byStage.get(stage) ?? []),

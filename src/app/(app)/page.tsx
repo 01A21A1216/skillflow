@@ -22,7 +22,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SegmentBar } from "@/components/ui/misc";
 import { toneVars } from "@/components/ui/tone";
-import { STAGE } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { cn, formatDate, formatNumber, formatTime, pluralize } from "@/lib/utils";
 import {
   actionQueue,
@@ -44,6 +44,7 @@ const ACTION_TONE = {
 
 export default async function DashboardPage() {
   const actor = await requireUser();
+  const pipeline = await loadPipeline();
   const snapshot = await dashboardSnapshot(actor);
   const actions = await actionQueue(10, actor);
   const attention = await attentionList(5, actor);
@@ -184,7 +185,7 @@ export default async function DashboardPage() {
               rows: snapshot.funnel.map((f) => [
                 f.label,
                 formatNumber(f.count),
-                `${Math.round(f.stepConversion)}%`,
+                f.stepConversion === null ? "—" : `${Math.round(f.stepConversion)}%`,
                 `${Math.round(f.overallConversion)}%`,
               ]),
             }}
@@ -204,9 +205,9 @@ export default async function DashboardPage() {
               className="mt-4"
               height={10}
               segments={snapshot.stageTotals.map((s) => ({
-                label: STAGE[s.stage].label,
+                label: pipeline.label(s.stage),
                 value: s.count,
-                tone: STAGE[s.stage].tone,
+                tone: pipeline.get(s.stage).tone,
               }))}
             />
             <ul className="mt-4 space-y-2.5">
@@ -217,12 +218,12 @@ export default async function DashboardPage() {
                     className="group flex items-center gap-3 text-[13px]"
                   >
                     <span
-                      style={toneVars(STAGE[s.stage].tone)}
+                      style={toneVars(pipeline.get(s.stage).tone)}
                       className="size-2 shrink-0 rounded-full bg-[hsl(var(--tone))]"
                       aria-hidden
                     />
                     <span className="flex-1 truncate text-content-muted group-hover:text-content">
-                      {STAGE[s.stage].label}
+                      {pipeline.label(s.stage)}
                     </span>
                     {s.aging > 0 ? (
                       <span

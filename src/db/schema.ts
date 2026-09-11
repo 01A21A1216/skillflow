@@ -154,6 +154,43 @@ export const clients = pgTable(
  * Requisitions (open job requirements)
  * ------------------------------------------------------------------ */
 
+/**
+ * Pipeline stages (§8).
+ *
+ * Rows, not a constant, so an administrator can rename, reorder, retune the SLA
+ * of, disable, or add a stage. `kind` is what makes that safe: the application's
+ * rules are written against the kind, so a new stage declared as `interviewing`
+ * behaves like one everywhere — the interview sync owns it, the funnel counts
+ * it, a requirement reads "Interviewing" from it — without a code change.
+ *
+ * Terminal states (rejected, withdrawn, on hold) are deliberately not here.
+ * Each means something the application itself acts on, so adding a fourth would
+ * be adding a rule rather than a column on a board.
+ */
+export const pipelineStages = pgTable(
+  "pipeline_stages",
+  {
+    id: pk(),
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    kind: text("kind").notNull(),
+    tone: text("tone").notNull().default("slate"),
+    description: text("description").notNull().default(""),
+    slaDays: integer("sla_days").notNull().default(5),
+    position: integer("position").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    /** Built-in stages cannot be deleted; the spec's eleven are the baseline. */
+    builtIn: boolean("built_in").notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    ...stewardship(),
+  },
+  (t) => [
+    uniqueIndex("stage_key_idx").on(t.key),
+    index("stage_position_idx").on(t.position),
+  ],
+);
+
 export const requisitions = pgTable(
   "requisitions",
   {

@@ -212,6 +212,26 @@ CREATE TABLE "permissions" (
 	"sensitive" boolean DEFAULT false NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "pipeline_stages" (
+	"id" text PRIMARY KEY NOT NULL,
+	"key" text NOT NULL,
+	"label" text NOT NULL,
+	"kind" text NOT NULL,
+	"tone" text DEFAULT 'slate' NOT NULL,
+	"description" text DEFAULT '' NOT NULL,
+	"sla_days" integer DEFAULT 5 NOT NULL,
+	"position" integer DEFAULT 0 NOT NULL,
+	"active" boolean DEFAULT true NOT NULL,
+	"built_in" boolean DEFAULT false NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"created_by" text,
+	"updated_by" text,
+	"deleted_at" timestamp with time zone,
+	"deleted_by" text,
+	"row_version" integer DEFAULT 1 NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "requisition_assignees" (
 	"id" text PRIMARY KEY NOT NULL,
 	"requisition_id" text NOT NULL,
@@ -426,6 +446,8 @@ CREATE INDEX "note_deleted_idx" ON "notes" USING btree ("deleted_at");--> statem
 CREATE INDEX "offer_sub_idx" ON "offers" USING btree ("submission_id");--> statement-breakpoint
 CREATE INDEX "offer_status_idx" ON "offers" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "offer_deleted_idx" ON "offers" USING btree ("deleted_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "stage_key_idx" ON "pipeline_stages" USING btree ("key");--> statement-breakpoint
+CREATE INDEX "stage_position_idx" ON "pipeline_stages" USING btree ("position");--> statement-breakpoint
 CREATE UNIQUE INDEX "req_assignee_idx" ON "requisition_assignees" USING btree ("requisition_id","user_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "req_code_idx" ON "requisitions" USING btree ("code");--> statement-breakpoint
 CREATE INDEX "req_status_idx" ON "requisitions" USING btree ("status");--> statement-breakpoint

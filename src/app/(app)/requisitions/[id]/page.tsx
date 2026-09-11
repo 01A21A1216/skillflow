@@ -43,7 +43,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LinkButton } from "@/components/ui/link-button";
 import { Meter } from "@/components/ui/misc";
-import { STAGE_SLA_DAYS, type Stage } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { daysBetween, formatDate, formatDateTime, formatMoney, formatRange, pct, pluralize } from "@/lib/utils";
 import { requisitionActivity } from "@/server/queries/dashboard";
 import {
@@ -77,6 +77,7 @@ export default async function RequisitionDetailPage({
 }) {
   const { id } = await params;
   const actor = await requirePermission("requisition.view.assigned");
+  const stages = await loadPipeline();
   // Out of scope reads as "not found" rather than "forbidden", so the page
   // does not confirm the existence of a record the actor may not see.
   const detail = await getRequisition(id, actor);
@@ -543,9 +544,9 @@ export default async function RequisitionDetailPage({
                 description="How long a candidate should spend in each stage."
               />
               <ul className="mt-4 space-y-2 text-[12.5px]">
-                {(Object.entries(STAGE_SLA_DAYS) as [Stage, number][])
-                  .filter(([, days]) => days > 0)
-                  .map(([stage, days]) => {
+                {stages.live
+                  .filter((s) => s.slaDays > 0)
+                  .map(({ key: stage, slaDays: days }) => {
                     const inStage = cards.filter((c) => c.stage === stage);
                     const over = inStage.filter((c) => c.isAging).length;
                     return (

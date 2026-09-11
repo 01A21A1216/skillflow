@@ -7,6 +7,8 @@ import {
   openRequisitionCount,
 } from "@/server/queries/dashboard";
 import { listInterviews } from "@/server/queries/interviews";
+import { loadPipeline } from "@/server/pipeline";
+import { PipelineProvider } from "@/components/domain/pipeline-context";
 
 /**
  * Every authenticated route renders through here, so the session check cannot
@@ -24,9 +26,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     offers: await openOfferCount(actor),
   };
 
+  // Published once here rather than fetched by each board, picker and badge.
+  const pipeline = await loadPipeline();
+
   return (
-    <AppShell actor={actor} permissions={[...granted]} counts={counts}>
-      {children}
-    </AppShell>
+    <PipelineProvider stages={pipeline.all}>
+      <AppShell actor={actor} permissions={[...granted]} counts={counts}>
+        {children}
+      </AppShell>
+    </PipelineProvider>
   );
 }

@@ -42,7 +42,8 @@ import {
 import {
   DEFAULT_COMPETENCIES,
   FEEDBACK_SLA_HOURS,
-  STAGE_ORDER,
+  DEFAULT_PIPELINE,
+  DEFAULT_STAGES,
   isRateBased,
   type Stage,
 } from "../lib/domain";
@@ -247,6 +248,27 @@ const interviewerPool = [...byRole("interviewer"), ...hiringManagers];
  * per-role scorecards (§11). The general one is the default a requirement
  * falls back to.
  * ------------------------------------------------------------------ */
+
+/**
+ * The specification's eleven stages, written as rows so an administrator can
+ * rename, reorder, retune or extend them (§8). Marked built-in, which is what
+ * stops the settings screen offering to delete one the application's own rules
+ * depend on.
+ */
+const stageRows: (typeof s.pipelineStages.$inferInsert)[] = DEFAULT_STAGES.map((st) => ({
+  id: id("stg"),
+  key: st.key,
+  label: st.label,
+  kind: st.kind,
+  tone: st.tone,
+  description: st.description,
+  slaDays: st.slaDays,
+  position: st.position,
+  active: st.active,
+  builtIn: true,
+  createdAt: new Date(NOW - 300 * DAY),
+  updatedAt: new Date(NOW - 300 * DAY),
+}));
 
 const scorecardTemplateRows: (typeof s.scorecardTemplates.$inferInsert)[] = [];
 const scorecardCriterionRows: (typeof s.scorecardCriteria.$inferInsert)[] = [];
@@ -771,7 +793,7 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
  * The simulation works in indices, so every reference to a position goes
  * through `SI` rather than a literal — an inserted stage then costs one line.
  */
-const STAGES = STAGE_ORDER;
+const STAGES = DEFAULT_PIPELINE.order;
 type StageName = Stage;
 
 const SI = (stage: StageName) => STAGES.indexOf(stage);
@@ -1523,6 +1545,7 @@ async function main() {
   await insertAll(s.permissions as never, permissionRows, "permissions");
   await insertAll(s.rolePermissions as never, rolePermissionRows, "role permissions");
   await insertAll(s.users as never, users, "users");
+  await insertAll(s.pipelineStages as never, stageRows, "pipeline stages");
   await insertAll(s.scorecardTemplates as never, scorecardTemplateRows, "scorecards");
   await insertAll(s.scorecardCriteria as never, scorecardCriterionRows, "scorecard criteria");
   await insertAll(s.clients as never, clients, "clients");

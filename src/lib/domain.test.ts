@@ -1,36 +1,36 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ACTIVE_STAGES,
-  ALL_STAGES,
   AUTHORED_REQ_STATUSES,
+  DEFAULT_PIPELINE,
+  DEFAULT_STAGES,
   EMPLOYMENT_TYPES,
-  PIPELINE_STAGES,
+  KIND_ORDER,
+  Pipeline,
   PROGRESS_BUCKETS,
   REQ_STATUSES,
-  STAGE_ORDER,
-  STAGE_SLA_DAYS,
   TERMINAL_STAGES,
   WORK_AUTHORIZATIONS,
-  atOrPast,
-  bucketStages,
   isRateBased,
-  progressBucket,
+  isTerminal,
   requisitionProgress,
-  stageIndex,
   visaMatches,
-  type Stage,
+  type StageDef,
 } from "./domain";
 
 /**
  * The domain vocabulary is the one thing every other layer reads. A stage that
  * loses its SLA, or a status that becomes settable when it is supposed to be
  * derived, breaks quietly — these pin the shape the spec asks for.
+ *
+ * Since stages became configuration, the tests that matter most are the ones
+ * showing a *custom* pipeline still answers every question the application asks
+ * of it. That is the whole promise of moving them into a table.
  */
 
-describe("pipeline stages", () => {
+describe("the default pipeline", () => {
   it("has the eleven stages from the specification, in order", () => {
-    expect(STAGE_ORDER).toEqual([
+    expect(DEFAULT_PIPELINE.order).toEqual([
       "new",
       "screening",
       "qualified",
@@ -46,43 +46,120 @@ describe("pipeline stages", () => {
   });
 
   it("carries Rejected, Withdrawn and On Hold as terminal states", () => {
-    expect(TERMINAL_STAGES.map((s) => s.value)).toEqual(["rejected", "withdrawn", "on_hold"]);
+    expect(TERMINAL_STAGES.map((s) => s.key)).toEqual(["rejected", "withdrawn", "on_hold"]);
+    for (const t of TERMINAL_STAGES) expect(isTerminal(t.key)).toBe(true);
   });
 
-  it("gives every stage an SLA entry, so no stage silently never ages", () => {
-    for (const stage of ALL_STAGES) {
-      expect(STAGE_SLA_DAYS[stage.value]).toBeTypeOf("number");
-    }
-  });
-
-  it("counts everything before Joined as live pipeline", () => {
-    expect(ACTIVE_STAGES).toHaveLength(PIPELINE_STAGES.length - 1);
-    expect(ACTIVE_STAGES).not.toContain("joined");
+  it("counts everything before the placement stage as live pipeline", () => {
+    expect(DEFAULT_PIPELINE.active).toHaveLength(DEFAULT_PIPELINE.live.length - 1);
+    expect(DEFAULT_PIPELINE.active).not.toContain("joined");
   });
 
   it("places terminal stages outside the ordered pipeline", () => {
-    for (const t of TERMINAL_STAGES) expect(stageIndex(t.value)).toBe(-1);
+    for (const t of TERMINAL_STAGES) expect(DEFAULT_PIPELINE.index(t.key)).toBe(-1);
   });
 
-  it("labels each stage exactly once", () => {
-    const values = ALL_STAGES.map((s) => s.value);
-    expect(new Set(values).size).toBe(values.length);
+  it("names each stage exactly once", () => {
+    const keys = DEFAULT_STAGES.map((s) => s.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("assigns every live stage a kind that is part of the progression", () => {
+    for (const s of DEFAULT_PIPELINE.live) expect(KIND_ORDER).toContain(s.kind);
+  });
+
+  it("renders an unknown stage as itself rather than as a blank", () => {
+    const unknown = DEFAULT_PIPELINE.get("something_bespoke");
+    expect(unknown.label).toBe("something bespoke");
+    expect(unknown.tone).toBe("neutral");
   });
 });
 
 describe("atOrPast", () => {
+  const p = DEFAULT_PIPELINE;
+
   it("is true at the mark and beyond", () => {
-    expect(atOrPast("submitted", "submitted")).toBe(true);
-    expect(atOrPast("offer", "submitted")).toBe(true);
+    expect(p.atOrPast("submitted", "submitted")).toBe(true);
+    expect(p.atOrPast("offer", "submitted")).toBe(true);
   });
 
   it("is false before the mark", () => {
-    expect(atOrPast("screening", "submitted")).toBe(false);
+    expect(p.atOrPast("screening", "submitted")).toBe(false);
   });
 
   it("is false for a terminal stage, which is not 'past' anything", () => {
-    expect(atOrPast("rejected", "new")).toBe(false);
-    expect(atOrPast("on_hold", "new")).toBe(false);
+    expect(p.atOrPast("rejected", "new")).toBe(false);
+    expect(p.atOrPastKind("on_hold", "sourcing")).toBe(false);
+  });
+
+  it("compares by phase, so a renamed stage still answers correctly", () => {
+    expect(p.atOrPastKind("client_review", "submitted")).toBe(true);
+    expect(p.atOrPastKind("qualified", "submitted")).toBe(false);
+    expect(p.atOrPastKind("joined", "offer")).toBe(true);
+  });
+});
+
+describe("a customised pipeline", () => {
+  /**
+   * What an administrator might actually do: drop Qualified, rename Client
+   * Review to something client-facing, add a second client-side stage, and
+   * retune an SLA. Nothing here is a code change.
+   */
+  const custom = new Pipeline([
+    { key: "new", label: "Inbox", kind: "sourcing", tone: "slate", description: "", slaDays: 2, position: 0, active: true },
+    { key: "screening", label: "Screening", kind: "sourcing", tone: "cyan", description: "", slaDays: 3, position: 1, active: true },
+    { key: "qualified", label: "Qualified", kind: "sourcing", tone: "cyan", description: "", slaDays: 3, position: 2, active: false },
+    { key: "submitted", label: "Sent to client", kind: "submitted", tone: "blue", description: "", slaDays: 2, position: 3, active: true },
+    { key: "shortlisted", label: "Client shortlist", kind: "submitted", tone: "indigo", description: "", slaDays: 4, position: 4, active: true },
+    { key: "iv_booked", label: "Interview booked", kind: "interviewing", tone: "violet", description: "", slaDays: 6, position: 5, active: true },
+    { key: "iv_done", label: "Interview done", kind: "interviewing", tone: "violet", description: "", slaDays: 2, position: 6, active: true },
+    { key: "offer", label: "Offer", kind: "offer", tone: "amber", description: "", slaDays: 5, position: 7, active: true },
+    { key: "started", label: "Started", kind: "placement", tone: "emerald", description: "", slaDays: 0, position: 8, active: true },
+  ] satisfies StageDef[]);
+
+  it("drops a disabled stage from the board without losing its definition", () => {
+    expect(custom.order).not.toContain("qualified");
+    expect(custom.active).toEqual([
+      "new",
+      "screening",
+      "submitted",
+      "shortlisted",
+      "iv_booked",
+      "iv_done",
+      "offer",
+    ]);
+  });
+
+  it("answers phase questions about stages the code has never heard of", () => {
+    expect(custom.kind("shortlisted")).toBe("submitted");
+    expect(custom.atOrPastKind("shortlisted", "submitted")).toBe(true);
+    expect(custom.atOrPastKind("shortlisted", "interviewing")).toBe(false);
+    expect(custom.bucket("shortlisted")).toBe("submitted");
+  });
+
+  it("knows where to put someone entering a phase", () => {
+    expect(custom.entryOf("interviewing")).toBe("iv_booked");
+    expect(custom.entryOf("submitted")).toBe("submitted");
+    expect(custom.lastOf("submitted")).toBe("shortlisted");
+  });
+
+  it("uses the configured SLA, not the built-in one", () => {
+    expect(custom.sla("new")).toBe(2);
+    expect(DEFAULT_PIPELINE.sla("new")).toBe(3);
+  });
+
+  it("uses the configured label, not the stage key", () => {
+    expect(custom.label("new")).toBe("Inbox");
+    expect(custom.label("submitted")).toBe("Sent to client");
+  });
+
+  it("keeps the terminal states, which are not configurable", () => {
+    expect(custom.terminal.map((t) => t.key)).toEqual(["rejected", "withdrawn", "on_hold"]);
+  });
+
+  it("falls back rather than rendering an empty board", () => {
+    const empty = new Pipeline([]);
+    expect(empty.order).toEqual(DEFAULT_PIPELINE.order);
   });
 });
 
@@ -150,36 +227,20 @@ describe("requisitionProgress", () => {
 
 describe("progress buckets", () => {
   it("assigns every live stage to exactly one bucket", () => {
-    for (const stage of ACTIVE_STAGES) expect(progressBucket(stage)).not.toBeNull();
-  });
-
-  it("assigns no terminal stage or Joined to a bucket", () => {
-    for (const t of [...TERMINAL_STAGES.map((s) => s.value), "joined" as Stage]) {
-      expect(progressBucket(t)).toBeNull();
+    for (const stage of DEFAULT_PIPELINE.active) {
+      expect(DEFAULT_PIPELINE.bucket(stage)).not.toBeNull();
     }
   });
 
-  it("folds a stage breakdown without losing anyone", () => {
-    const folded = bucketStages({
-      new: 4,
-      qualified: 2,
-      client_review: 3,
-      feedback_pending: 1,
-      selected: 1,
-      offer: 2,
-    });
-    expect(folded).toEqual({ sourcing: 6, submitted: 3, interviewing: 1, offer: 3 });
-    const total = PROGRESS_BUCKETS.reduce((n, b) => n + folded[b.key], 0);
-    expect(total).toBe(13);
+  it("assigns no terminal stage or placement stage to a bucket", () => {
+    for (const t of [...TERMINAL_STAGES.map((s) => s.key), "joined"]) {
+      expect(DEFAULT_PIPELINE.bucket(t)).toBeNull();
+    }
   });
 
-  it("ignores stages that are not live pipeline", () => {
-    expect(bucketStages({ joined: 5, rejected: 9, on_hold: 2 })).toEqual({
-      sourcing: 0,
-      submitted: 0,
-      interviewing: 0,
-      offer: 0,
-    });
+  it("covers every bucket the summary bar renders", () => {
+    const reachable = new Set(DEFAULT_PIPELINE.active.map((s) => DEFAULT_PIPELINE.bucket(s)));
+    for (const b of PROGRESS_BUCKETS) expect(reachable.has(b.key)).toBe(true);
   });
 });
 

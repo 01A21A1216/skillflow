@@ -6,7 +6,8 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { candidates, notes, requisitions, stageEvents, submissions } from "@/db/schema";
 import type { User } from "@/db/schema";
-import { STAGE, STAGE_ORDER, atOrPast, stageIndex, type Stage } from "@/lib/domain";
+import { isTerminal, type Pipeline, type Stage } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import {
   addToPipelineSchema,
   holdSchema,
@@ -64,6 +65,19 @@ async function syncRequisitionFill(requisitionId: string) {
     );
 }
 
+/**
+ * Resolve a stage key posted by a form against the configured pipeline.
+ *
+ * Stage keys used to be a compile-time enum; now they are rows, so this is the
+ * boundary where an unknown one is caught. A stale tab posting a stage an
+ * administrator has since removed gets a message naming the problem rather than
+ * writing a key nothing can render.
+ */
+function resolveStage(pipeline: Pipeline, key: string | undefined, fallback: Stage) {
+  const stage = key ?? fallback;
+  return pipeline.index(stage) >= 0 ? { ok: true as const, stage } : { ok: false as const, stage };
+}
+
 /** The last live stage a submission held before it was parked or closed out. */
 async function lastLiveStage(submissionId: string, fallback: string) {
   const events = await db
@@ -72,7 +86,7 @@ async function lastLiveStage(submissionId: string, fallback: string) {
     .where(eq(stageEvents.submissionId, submissionId))
     .orderBy(desc(stageEvents.createdAt));
 
-  const live = events.find((e) => stageIndex(e.toStage as Stage) >= 0);
+  const live = events.find((e) => !isTerminal(e.toStage));
   return (live?.toStage ?? fallback) as Stage;
 }
 
@@ -80,6 +94,12 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
   const parsed = parseForm(addToPipelineSchema, formData);
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
+  const pipeline = await loadPipeline();
+
+  const entry = resolveStage(pipeline, input.stage, pipeline.order[0]!);
+  if (!entry.ok) {
+    return fail("That stage no longer exists. Reload and try again.", { stage: "Unknown stage" });
+  }
 
   const candidate = (await db.select().from(candidates).where(eq(candidates.id, input.candidateId)))[0];
   const req = (await db.select().from(requisitions).where(eq(requisitions.id, input.requisitionId)))[0];
@@ -103,7 +123,7 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
 
   const id = newId("sub");
   const now = new Date();
-  const stage = input.stage as Stage;
+  const stage = entry.stage;
 
   db.transaction(async (tx) => {
     (await tx.insert(submissions)
@@ -115,7 +135,7 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
         status: "active",
         ownerId: req.leadRecruiterId,
         matchScore: input.matchScore,
-        submittedAt: atOrPast(stage, "submitted") ? now : null,
+        submittedAt: pipeline.atOrPastKind(stage, "submitted") ? now : null,
         stageSince: now,
         ...stampNew(actor.id),
       })
@@ -123,7 +143,7 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
 
     // Backfill the stages this candidate is being dropped past, so funnel
     // analytics and the timeline stay consistent.
-    const path = STAGE_ORDER.slice(0, stageIndex(stage) + 1);
+    const path = pipeline.order.slice(0, pipeline.index(stage) + 1);
     for (const [i, s] of path.entries()) {
       (await tx.insert(stageEvents)
         .values({
@@ -177,6 +197,10 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   const parsed = parseForm(moveStageSchema, formData);
   if (!parsed.success) return parsed.state;
   const { submissionId, stage, note } = parsed.data;
+  const pipeline = await loadPipeline();
+  if (pipeline.index(stage) < 0) {
+    return fail("That stage no longer exists. Reload and try again.", { stage: "Unknown stage" });
+  }
 
   const row = (await db
     .select({ submission: submissions, candidate: candidates, requisition: requisitions })
@@ -190,7 +214,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   const { submission, candidate, requisition } = row;
 
   if (submission.stage === stage && submission.status === "active") {
-    return fail(`Already in ${STAGE[stage as Stage].label}.`);
+    return fail(`Already in ${pipeline.label(stage)}.`);
   }
 
   const target = stage as Stage;
@@ -206,7 +230,9 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
         rejectionReason: null,
         rejectedAt: null,
         submittedAt:
-          atOrPast(target, "submitted") && !submission.submittedAt ? now : submission.submittedAt,
+          pipeline.atOrPastKind(target, "submitted") && !submission.submittedAt
+            ? now
+            : submission.submittedAt,
         ...stamp(actor.id, submission.rowVersion + 1),
       })
       .where(eq(submissions.id, submissionId))
@@ -241,7 +267,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
     actorId: actor.id,
     summary: hiring
       ? `${candidate.firstName} ${candidate.lastName} joined ${requisition.title}`
-      : `${candidate.firstName} ${candidate.lastName} moved to ${STAGE[target].label} on ${requisition.code}`,
+      : `${candidate.firstName} ${candidate.lastName} moved to ${pipeline.label(target)} on ${requisition.code}`,
     changes: [{ field: "stage", label: "Stage", from: submission.stage, to: target }],
     meta: { requisitionId: requisition.id, candidateId: candidate.id, from: submission.stage, to: target },
   });
@@ -250,7 +276,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   return succeed(
     hiring
       ? `${candidate.firstName} marked as joined`
-      : `Moved to ${STAGE[target].label}`,
+      : `Moved to ${pipeline.label(target)}`,
   );
 }
 
@@ -420,8 +446,15 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
 
   // A held candidate resumes where they stopped rather than restarting at
   // Screening, so parking someone does not cost them their pipeline position.
+  const pipeline = await loadPipeline();
+  const restartAt = resolveStage(pipeline, stage, pipeline.order[1] ?? pipeline.order[0]!);
+  if (!restartAt.ok) {
+    return fail("That stage no longer exists. Reload and try again.", { stage: "Unknown stage" });
+  }
   const resumeAt =
-    submission.status === "on_hold" ? await lastLiveStage(submissionId, stage) : stage;
+    submission.status === "on_hold"
+      ? await lastLiveStage(submissionId, restartAt.stage)
+      : restartAt.stage;
 
   db.transaction(async (tx) => {
     (await tx.update(submissions)

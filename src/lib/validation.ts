@@ -9,7 +9,6 @@ import {
   INTERVIEW_MODES,
   INTERVIEW_TYPES,
   OFFER_STATUSES,
-  PIPELINE_STAGES,
   PRIORITIES,
   RECOMMENDATIONS,
   REJECTION_REASONS,
@@ -157,17 +156,28 @@ export const candidateSchema = z.object({
  * Pipeline
  * ------------------------------------------------------------------ */
 
+/**
+ * A stage key.
+ *
+ * Not an enum: stages are configuration now, so the valid set is not known when
+ * this module loads. Shape is checked here and membership in the action against
+ * the pipeline that is actually configured — which is also the only place that
+ * can give a useful message when a stage has been renamed out from under a
+ * stale tab.
+ */
+const stageKey = z.string().trim().min(1, "Pick a stage").max(60);
+
 export const addToPipelineSchema = z.object({
   candidateId: nonEmpty("Candidate"),
   requisitionId: nonEmpty("Requisition"),
-  stage: z.enum(values(PIPELINE_STAGES)).default("new"),
+  stage: stageKey.optional(),
   matchScore: z.coerce.number().int().min(0).max(100).default(70),
   note: optionalText(1000),
 });
 
 export const moveStageSchema = z.object({
   submissionId: nonEmpty("Submission"),
-  stage: z.enum(values(PIPELINE_STAGES)),
+  stage: stageKey,
   note: optionalText(1000),
 });
 
@@ -190,7 +200,7 @@ export const holdSchema = z.object({
 
 export const reopenSchema = z.object({
   submissionId: nonEmpty("Submission"),
-  stage: z.enum(values(PIPELINE_STAGES)).default("screening"),
+  stage: stageKey.optional(),
 });
 
 /* ------------------------------------------------------------------ *
@@ -273,6 +283,39 @@ export const offerTransitionSchema = z.object({
     .enum(DECLINE_REASONS as unknown as [string, ...string[]])
     .optional()
     .or(z.literal("").transform(() => undefined)),
+});
+
+/* ------------------------------------------------------------------ *
+ * Settings
+ * ------------------------------------------------------------------ */
+
+/**
+ * A pipeline stage an administrator is editing (§8).
+ *
+ * `kind` is the field that carries meaning, so it is the one field a built-in
+ * stage cannot have changed: re-labelling "Client Review" is a cosmetic choice,
+ * but declaring it a placement stage would silently rewrite what the funnel,
+ * the interview sync and requirement statuses all mean.
+ */
+export const stageSchema = z.object({
+  stageId: optionalText(60),
+  key: z
+    .string()
+    .trim()
+    .min(2, "Give the stage a key")
+    .max(40)
+    .regex(/^[a-z][a-z0-9_]*$/, "Lower case letters, digits and underscores only"),
+  label: nonEmpty("Label", 60),
+  kind: z.enum(["sourcing", "submitted", "interviewing", "offer", "placement"]),
+  tone: nonEmpty("Colour", 20),
+  description: optionalText(200),
+  slaDays: z.coerce.number().int().min(0).max(120),
+  position: z.coerce.number().int().min(0).max(99),
+  active: z.coerce.boolean().default(true),
+});
+
+export const stageOrderSchema = z.object({
+  order: z.array(z.string().max(60)).min(1),
 });
 
 /* ------------------------------------------------------------------ *

@@ -24,8 +24,8 @@ import {
   PROGRESS_BUCKETS,
   REQ_STATUSES,
   WORK_MODES,
-  bucketStages,
 } from "@/lib/domain";
+import { bucketStages, loadPipeline } from "@/server/pipeline";
 import { cn, formatDate, formatRange, pluralize } from "@/lib/utils";
 import {
   listRequisitions,
@@ -80,6 +80,7 @@ export default async function RequisitionsPage({
   };
 
   const actor = await requirePermission("requisition.view.assigned");
+  const pipeline = await loadPipeline();
   const rows = await listRequisitions(filters, actor);
   const facets = await requisitionFacets();
   const breakdown = await stageBreakdownForRequisitions(rows.map((r) => r.id));
@@ -244,7 +245,7 @@ export default async function RequisitionsPage({
                             height={6}
                             segments={PROGRESS_BUCKETS.map((b) => ({
                               label: b.label,
-                              value: bucketStages(stages)[b.key],
+                              value: bucketStages(pipeline, stages)[b.key],
                               tone: b.tone,
                             }))}
                           />

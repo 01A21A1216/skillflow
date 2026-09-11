@@ -18,6 +18,20 @@ export type Tone =
   | "cyan"
   | "orange";
 
+/** Every tone, for pickers that let someone choose one. */
+export const TONES: Tone[] = [
+  "neutral",
+  "slate",
+  "blue",
+  "indigo",
+  "violet",
+  "amber",
+  "emerald",
+  "rose",
+  "cyan",
+  "orange",
+];
+
 export interface Meta<T extends string> {
   value: T;
   label: string;
@@ -33,101 +47,224 @@ function index<T extends string>(list: Meta<T>[]) {
  * Pipeline stages
  * ------------------------------------------------------------------ */
 
-export type Stage =
-  | "new"
-  | "screening"
-  | "qualified"
-  | "submitted"
-  | "client_review"
-  | "interview_scheduled"
-  | "interview_completed"
-  | "feedback_pending"
-  | "selected"
-  | "offer"
-  | "joined"
-  | "rejected"
-  | "withdrawn"
-  | "on_hold";
-
 /**
- * The stages a submission passes through, in order (§8).
+ * A pipeline stage key.
  *
- * Tones repeat where two stages are phases of one activity (the two interview
- * stages, Selected before Offer) — every badge and column carries its label, so
- * colour reinforces the phase rather than carrying identity on its own.
+ * Deliberately a plain string rather than a union: stages are rows an
+ * administrator can add, rename and reorder (§8), so the set is not knowable at
+ * compile time. What *is* fixed is the vocabulary of meanings below — code asks
+ * "is this an interview stage?" rather than "is this key `interview_scheduled`?",
+ * which is what lets a new stage work everywhere the moment it is created.
  */
-export const PIPELINE_STAGES: Meta<Stage>[] = [
-  { value: "new", label: "New", tone: "slate", description: "In the pipeline, not yet worked" },
-  { value: "screening", label: "Screening", tone: "cyan", description: "Recruiter screen in progress" },
-  { value: "qualified", label: "Qualified", tone: "cyan", description: "Screened and fit for the requirement" },
-  { value: "submitted", label: "Submitted", tone: "blue", description: "Profile sent to the client" },
-  { value: "client_review", label: "Client Review", tone: "indigo", description: "With the client for a decision" },
-  { value: "interview_scheduled", label: "Interview Scheduled", tone: "violet", description: "Interview booked and confirmed" },
-  { value: "interview_completed", label: "Interview Completed", tone: "violet", description: "Interview done, decision pending" },
-  { value: "feedback_pending", label: "Feedback Pending", tone: "orange", description: "Waiting on interviewer feedback" },
-  { value: "selected", label: "Selected", tone: "amber", description: "Chosen by the client, pre-offer" },
-  { value: "offer", label: "Offer", tone: "amber", description: "Offer drafted, approved or extended" },
-  { value: "joined", label: "Joined", tone: "emerald", description: "Started in the role" },
+export type Stage = string;
+
+/**
+ * What a stage *means*, as opposed to what it is called.
+ *
+ * This is the closed set. A custom stage is declared to be one of these, and
+ * every rule in the application — when a submission counts as submitted, which
+ * stages the interview sync owns, how a requirement reads its own progress —
+ * is written against the kind rather than against a key someone can rename.
+ */
+export type StageKind =
+  | "sourcing"
+  | "submitted"
+  | "interviewing"
+  | "offer"
+  | "placement"
+  | "terminal";
+
+export const STAGE_KINDS: Meta<StageKind>[] = [
+  { value: "sourcing", label: "Sourcing", tone: "cyan", description: "Ours to work — the client has not seen them" },
+  { value: "submitted", label: "With the client", tone: "blue", description: "Submitted and under review" },
+  { value: "interviewing", label: "Interviewing", tone: "violet", description: "In the loop, or waiting on its outcome" },
+  { value: "offer", label: "Deciding", tone: "amber", description: "Selected, or at offer" },
+  { value: "placement", label: "Placed", tone: "emerald", description: "The end of a successful pipeline" },
+  { value: "terminal", label: "Closed out", tone: "slate", description: "Not moving: rejected, withdrawn or on hold" },
+];
+export const STAGE_KIND = index(STAGE_KINDS);
+
+/** The order the live kinds occur in. Terminal is not part of the progression. */
+export const KIND_ORDER: StageKind[] = [
+  "sourcing",
+  "submitted",
+  "interviewing",
+  "offer",
+  "placement",
+];
+
+export interface StageDef {
+  key: Stage;
+  label: string;
+  kind: StageKind;
+  tone: Tone;
+  description: string;
+  /** Days before a submission sitting here is "aging". 0 means never. */
+  slaDays: number;
+  position: number;
+  active: boolean;
+}
+
+/**
+ * The stages the specification asks for (§8), used to seed the table and as the
+ * fallback if it is empty. After seeding the database is the authority; nothing
+ * reads this list at request time except as a last resort.
+ *
+ * SLAs are tight where a stage is a handover to somebody else (Client Review,
+ * Feedback Pending), because that is where pipelines silently stall.
+ */
+export const DEFAULT_STAGES: StageDef[] = [
+  { key: "new", label: "New", kind: "sourcing", tone: "slate", description: "In the pipeline, not yet worked", slaDays: 3, position: 0, active: true },
+  { key: "screening", label: "Screening", kind: "sourcing", tone: "cyan", description: "Recruiter screen in progress", slaDays: 4, position: 1, active: true },
+  { key: "qualified", label: "Qualified", kind: "sourcing", tone: "cyan", description: "Screened and fit for the requirement", slaDays: 3, position: 2, active: true },
+  { key: "submitted", label: "Submitted", kind: "submitted", tone: "blue", description: "Profile sent to the client", slaDays: 4, position: 3, active: true },
+  { key: "client_review", label: "Client Review", kind: "submitted", tone: "indigo", description: "With the client for a decision", slaDays: 5, position: 4, active: true },
+  { key: "interview_scheduled", label: "Interview Scheduled", kind: "interviewing", tone: "violet", description: "Interview booked and confirmed", slaDays: 7, position: 5, active: true },
+  { key: "interview_completed", label: "Interview Completed", kind: "interviewing", tone: "violet", description: "Interview done, decision pending", slaDays: 3, position: 6, active: true },
+  { key: "feedback_pending", label: "Feedback Pending", kind: "interviewing", tone: "orange", description: "Waiting on interviewer feedback", slaDays: 2, position: 7, active: true },
+  { key: "selected", label: "Selected", kind: "offer", tone: "amber", description: "Chosen by the client, pre-offer", slaDays: 4, position: 8, active: true },
+  { key: "offer", label: "Offer", kind: "offer", tone: "amber", description: "Offer drafted, approved or extended", slaDays: 7, position: 9, active: true },
+  { key: "joined", label: "Joined", kind: "placement", tone: "emerald", description: "Started in the role", slaDays: 0, position: 10, active: true },
 ];
 
 /**
- * Where a submission stopped. A closed-out submission keeps the terminal value
- * as its stage; `stage_events` still records the stage it left, so funnel
- * analytics can say where candidates are lost.
+ * Where a submission stopped.
+ *
+ * Terminal stages sit outside the ordered pipeline and are not configurable:
+ * each one means something the application itself acts on, so adding a fourth
+ * would be adding a rule, not a column on a board.
  */
-export const TERMINAL_STAGES: Meta<Stage>[] = [
-  { value: "rejected", label: "Rejected", tone: "rose" },
-  { value: "withdrawn", label: "Withdrawn", tone: "neutral" },
-  { value: "on_hold", label: "On hold", tone: "amber" },
+export const TERMINAL_STAGES: StageDef[] = [
+  { key: "rejected", label: "Rejected", kind: "terminal", tone: "rose", description: "We or the client passed", slaDays: 0, position: 100, active: true },
+  { key: "withdrawn", label: "Withdrawn", kind: "terminal", tone: "neutral", description: "The candidate stepped away", slaDays: 0, position: 101, active: true },
+  { key: "on_hold", label: "On hold", kind: "terminal", tone: "amber", description: "Parked, expected back", slaDays: 0, position: 102, active: true },
 ];
 
-export const ALL_STAGES = [...PIPELINE_STAGES, ...TERMINAL_STAGES];
-export const STAGE = index(ALL_STAGES);
-export const STAGE_ORDER = PIPELINE_STAGES.map((s) => s.value);
+export const TERMINAL_KEYS = TERMINAL_STAGES.map((s) => s.key);
 
-/** Stages that still count as live pipeline — everything before Joined. */
-export const ACTIVE_STAGES: Stage[] = PIPELINE_STAGES.filter((s) => s.value !== "joined").map(
-  (s) => s.value,
-);
+export function isTerminal(stage: Stage) {
+  return TERMINAL_KEYS.includes(stage);
+}
 
 /**
- * Target days a submission should spend in a stage before it is "aging".
- * Stages that are a handover to someone else (Client Review, Feedback Pending)
- * get tight SLAs because they are where pipelines silently stall.
+ * A resolved set of stages, with every lookup the rest of the application needs.
+ *
+ * Built once from whatever the database holds and passed around, rather than
+ * each caller re-deriving the same maps from a list.
  */
-export const STAGE_SLA_DAYS: Record<Stage, number> = {
-  new: 3,
-  screening: 4,
-  qualified: 3,
-  submitted: 4,
-  client_review: 5,
-  interview_scheduled: 7,
-  interview_completed: 3,
-  feedback_pending: 2,
-  selected: 4,
-  offer: 7,
-  joined: 0,
-  rejected: 0,
-  withdrawn: 0,
-  on_hold: 0,
-};
+export class Pipeline {
+  readonly all: StageDef[];
+  readonly live: StageDef[];
+  readonly terminal: StageDef[];
+  private readonly byKey: Map<Stage, StageDef>;
 
-export function stageIndex(stage: Stage) {
-  return STAGE_ORDER.indexOf(stage);
+  constructor(stages: StageDef[]) {
+    const live = stages
+      .filter((st) => st.kind !== "terminal" && st.active)
+      .sort((a, b) => a.position - b.position);
+    // A pipeline with no stages cannot be rendered or reasoned about, so an
+    // empty or entirely disabled configuration falls back rather than breaking.
+    this.live = live.length ? live : DEFAULT_STAGES;
+    this.terminal = TERMINAL_STAGES;
+    this.all = [...this.live, ...this.terminal];
+    this.byKey = new Map(this.all.map((st) => [st.key, st]));
+  }
+
+  /** Never undefined: an unknown key renders as itself rather than as a blank. */
+  get(stage: Stage): StageDef {
+    return (
+      this.byKey.get(stage) ?? {
+        key: stage,
+        label: stage.replace(/_/g, " "),
+        kind: "sourcing",
+        tone: "neutral",
+        description: "",
+        slaDays: 0,
+        position: -1,
+        active: false,
+      }
+    );
+  }
+
+  get order(): Stage[] {
+    return this.live.map((st) => st.key);
+  }
+
+  /** Everything before placement — what the board shows as columns. */
+  get active(): Stage[] {
+    return this.live.filter((st) => st.kind !== "placement").map((st) => st.key);
+  }
+
+  index(stage: Stage) {
+    return this.live.findIndex((st) => st.key === stage);
+  }
+
+  kind(stage: Stage): StageKind {
+    return this.get(stage).kind;
+  }
+
+  label(stage: Stage) {
+    return this.get(stage).label;
+  }
+
+  sla(stage: Stage) {
+    return this.get(stage).slaDays;
+  }
+
+  ofKind(kind: StageKind): Stage[] {
+    return this.live.filter((st) => st.kind === kind).map((st) => st.key);
+  }
+
+  /**
+   * The stage a candidate enters when they reach this phase.
+   *
+   * Used wherever the application has to *put* someone somewhere, and by funnel
+   * analytics, which counts entry into a phase exactly once.
+   */
+  entryOf(kind: StageKind): Stage {
+    return this.ofKind(kind)[0] ?? this.live[0]!.key;
+  }
+
+  /** The last stage of a phase — where someone rests before the next decision. */
+  lastOf(kind: StageKind): Stage {
+    const list = this.ofKind(kind);
+    return list[list.length - 1] ?? this.live[0]!.key;
+  }
+
+  /** True once a submission has reached the given phase. Terminal is never "past". */
+  atOrPastKind(stage: Stage, kind: StageKind) {
+    if (isTerminal(stage)) return false;
+    const here = KIND_ORDER.indexOf(this.kind(stage));
+    const mark = KIND_ORDER.indexOf(kind);
+    return here >= 0 && mark >= 0 && here >= mark;
+  }
+
+  /** True once a submission has reached the given stage, by position. */
+  atOrPast(stage: Stage, mark: Stage) {
+    const here = this.index(stage);
+    const there = this.index(mark);
+    return here >= 0 && there >= 0 && here >= there;
+  }
+
+  /** The bucket a live stage summarises into on a requirement card. */
+  bucket(stage: Stage): keyof StageCounts | null {
+    switch (this.kind(stage)) {
+      case "sourcing":
+        return "sourcing";
+      case "submitted":
+        return "submitted";
+      case "interviewing":
+        return "interviewing";
+      case "offer":
+        return "offer";
+      default:
+        return null;
+    }
+  }
 }
 
-/** True once a submission has reached `mark`. Terminal stages are never "at" a live stage. */
-export function atOrPast(stage: Stage, mark: Stage) {
-  const i = stageIndex(stage);
-  return i >= 0 && i >= stageIndex(mark);
-}
-
-/** The stages that mean an interview exists — used to keep interview state and stage in step. */
-export const INTERVIEW_STAGES: Stage[] = [
-  "interview_scheduled",
-  "interview_completed",
-  "feedback_pending",
-];
+/** The built-in pipeline, for tests and for code with no database to hand. */
+export const DEFAULT_PIPELINE = new Pipeline(DEFAULT_STAGES);
 
 /* ------------------------------------------------------------------ *
  * Submission status
@@ -235,27 +372,6 @@ export function requisitionProgress(stored: string, counts: StageCounts): ReqSta
   return "open";
 }
 
-/** Which `StageCounts` bucket a live stage falls into. */
-export function progressBucket(stage: Stage): keyof StageCounts | null {
-  switch (stage) {
-    case "new":
-    case "screening":
-    case "qualified":
-      return "sourcing";
-    case "submitted":
-    case "client_review":
-      return "submitted";
-    case "interview_scheduled":
-    case "interview_completed":
-    case "feedback_pending":
-      return "interviewing";
-    case "selected":
-    case "offer":
-      return "offer";
-    default:
-      return null;
-  }
-}
 
 export const EMPTY_STAGE_COUNTS: StageCounts = {
   sourcing: 0,
@@ -278,15 +394,6 @@ export const PROGRESS_BUCKETS: { key: keyof StageCounts; label: string; tone: To
   { key: "offer", label: "Offer", tone: "amber" },
 ];
 
-/** Fold a per-stage count map into those four buckets. */
-export function bucketStages(counts: Record<string, number> | undefined): StageCounts {
-  const out = { ...EMPTY_STAGE_COUNTS };
-  for (const [stage, n] of Object.entries(counts ?? {})) {
-    const bucket = progressBucket(stage as Stage);
-    if (bucket) out[bucket] += n;
-  }
-  return out;
-}
 
 export type Priority = "critical" | "high" | "medium" | "low";
 
@@ -744,6 +851,7 @@ export const ACTIVITY_TYPES = {
   note_added: { label: "Note added", tone: "slate" as Tone },
   attachment_added: { label: "File attached", tone: "cyan" as Tone },
   attachment_removed: { label: "File removed", tone: "slate" as Tone },
+  settings_changed: { label: "Settings changed", tone: "violet" as Tone },
 } as const;
 
 export type ActivityType = keyof typeof ACTIVITY_TYPES;

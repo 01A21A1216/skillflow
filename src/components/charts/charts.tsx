@@ -558,7 +558,7 @@ export function FunnelBars({
   steps,
   className,
 }: {
-  steps: { label: string; count: number; stepConversion: number; overallConversion: number }[];
+  steps: { label: string; count: number; stepConversion: number | null; overallConversion: number }[];
   className?: string;
 }) {
   const top = steps[0]?.count ?? 0;
@@ -583,7 +583,7 @@ export function FunnelBars({
                 <span className="font-semibold text-content">{formatNumber(s.count)}</span>
                 {i > 0 ? (
                   <span title="Conversion from the previous stage">
-                    {Math.round(s.stepConversion)}%
+                    {s.stepConversion === null ? "—" : `${Math.round(s.stepConversion)}%`}
                   </span>
                 ) : null}
               </span>

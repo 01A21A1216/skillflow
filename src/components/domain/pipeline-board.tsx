@@ -17,13 +17,8 @@ import { CalendarClock, GripVertical, ShieldAlert, Star } from "lucide-react";
 
 import type { PipelineCard } from "@/server/queries/pipeline";
 import { moveStageById } from "@/server/actions/pipeline";
-import {
-  ACTIVE_STAGES,
-  STAGE,
-  WORK_AUTHORIZATION,
-  type Stage,
-  type WorkAuthorization,
-} from "@/lib/domain";
+import { WORK_AUTHORIZATION, type Stage, type WorkAuthorization } from "@/lib/domain";
+import { usePipeline } from "./pipeline-context";
 import { cn, formatDate, formatTime } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { Avatar } from "@/components/ui/avatar";
@@ -47,6 +42,7 @@ export function PipelineBoard({
   compact?: boolean;
 }) {
   const toast = useToast();
+  const pipeline = usePipeline();
   const { capabilities } = usePipelineOptions();
   const [, startTransition] = useTransition();
   const [dragging, setDragging] = useState<PipelineCard | null>(null);
@@ -64,13 +60,13 @@ export function PipelineBoard({
 
   const columns = useMemo(() => {
     const map = new Map<Stage, PipelineCard[]>();
-    for (const stage of ACTIVE_STAGES) map.set(stage, []);
+    for (const stage of pipeline.active) map.set(stage, []);
     for (const card of optimistic) map.get(card.stage)?.push(card);
     for (const list of map.values()) {
       list.sort((a, b) => b.daysInStage - a.daysInStage || b.matchScore - a.matchScore);
     }
     return map;
-  }, [optimistic]);
+  }, [optimistic, pipeline]);
 
   function onDragStart(event: DragStartEvent) {
     setDragging(optimistic.find((c) => c.id === event.active.id) ?? null);
@@ -89,7 +85,7 @@ export function PipelineBoard({
         result.ok
           ? {
               kind: "success",
-              title: `${card.candidateName} → ${STAGE[target].label}`,
+              title: `${card.candidateName} → ${pipeline.label(target)}`,
               description: card.requisitionTitle,
             }
           : { kind: "error", title: "Could not move candidate", description: result.message },
@@ -100,7 +96,7 @@ export function PipelineBoard({
   return (
     <DndContext id="pipeline-board" sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="flex gap-3 overflow-x-auto pb-2">
-        {ACTIVE_STAGES.map((stage) => (
+        {pipeline.active.map((stage) => (
           <Column
             key={stage}
             stage={stage}
@@ -137,7 +133,7 @@ function Column({
   draggable: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
-  const meta = STAGE[stage];
+  const meta = usePipeline().get(stage);
   const aging = cards.filter((c) => c.isAging).length;
 
   return (

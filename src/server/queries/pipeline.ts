@@ -16,7 +16,8 @@ import {
   submissions,
   users,
 } from "@/db/schema";
-import { ACTIVE_STAGES, STAGE_SLA_DAYS, visaMatches, type Stage } from "@/lib/domain";
+import { visaMatches, type Stage } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { submissionScope, visibleRequisitionIds } from "@/server/authz";
@@ -63,9 +64,10 @@ export interface PipelineCard {
 
 /** Every live card in the funnel, ready to be bucketed by stage. */
 export async function pipelineCards(filters: PipelineFilters = {}, actor?: User): Promise<PipelineCard[]> {
+  const pipeline = await loadPipeline();
   const conditions = [
     eq(submissions.status, "active"),
-    inArray(submissions.stage, ACTIVE_STAGES as unknown as string[]),
+    inArray(submissions.stage, pipeline.active),
   ];
 
   if (actor) {
@@ -146,7 +148,7 @@ export async function pipelineCards(filters: PipelineFilters = {}, actor?: User)
   let cards: PipelineCard[] = rows.map(({ submission: s, candidate: c, requisition: r, clientName, ownerName }) => {
     const stage = s.stage as Stage;
     const daysInStage = daysBetween(s.stageSince);
-    const slaDays = STAGE_SLA_DAYS[stage] ?? 7;
+    const slaDays = pipeline.sla(stage);
     return {
       id: s.id,
       stage,
@@ -183,9 +185,10 @@ export async function pipelineCards(filters: PipelineFilters = {}, actor?: User)
   return cards;
 }
 
-export function groupByStage(cards: PipelineCard[]) {
+export async function groupByStage(cards: PipelineCard[]) {
+  const pipeline = await loadPipeline();
   const buckets = new Map<Stage, PipelineCard[]>();
-  for (const stage of ACTIVE_STAGES) buckets.set(stage, []);
+  for (const stage of pipeline.active) buckets.set(stage, []);
   for (const card of cards) buckets.get(card.stage)?.push(card);
   return buckets;
 }

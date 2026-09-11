@@ -17,16 +17,14 @@ import {
 import type { User } from "@/db/schema";
 import {
   FEEDBACK_SLA_HOURS,
-  INTERVIEW_STAGES,
   INTERVIEW_TYPE,
   PENDING_INTERVIEW_STATUSES,
   RECOMMENDATION_SCORE,
-  atOrPast,
   type InterviewStatus,
   type InterviewType,
   type Recommendation,
-  type Stage,
 } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import {
   declineFeedbackSchema,
   feedbackSchema,
@@ -60,7 +58,8 @@ async function syncInterviewStage(submissionId: string, actorId: string) {
   const current = (await db.select().from(submissions).where(eq(submissions.id, submissionId)))[0];
   if (!current) return;
   if (current.status !== "active") return;
-  if (!INTERVIEW_STAGES.includes(current.stage as Stage)) return;
+  const pipeline = await loadPipeline();
+  if (pipeline.kind(current.stage) !== "interviewing") return;
 
   const rounds = await db
     .select({
@@ -79,11 +78,13 @@ async function syncInterviewStage(submissionId: string, actorId: string) {
   const awaiting = live.some((r) => r.status === "scheduled" && r.scheduledAt.getTime() > Date.now());
   const owing = live.some((r) => r.status === "completed" && r.feedbackCount < r.panelSize);
 
-  const next: Stage = awaiting
-    ? "interview_scheduled"
-    : owing
-      ? "feedback_pending"
-      : "interview_completed";
+  // The three readings of the same facts, resolved against whatever the
+  // configured pipeline calls them. A pipeline with fewer interview stages
+  // simply lands everyone on the ones it has.
+  const band = pipeline.ofKind("interviewing");
+  const next =
+    (awaiting ? band[0] : owing ? (band[2] ?? band[band.length - 1]) : (band[1] ?? band[0])) ??
+    current.stage;
 
   if (next === current.stage) return;
 
@@ -125,6 +126,7 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
   if (!await canTouchRequisition(actor, ctx.requisition.id)) return denied("that requisition");
 
+  const pipeline = await loadPipeline();
   const when = new Date(input.scheduledAt);
   if (Number.isNaN(when.getTime())) {
     return fail("Pick a valid date and time.", { scheduledAt: "Invalid date" });
@@ -146,6 +148,9 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
     .from(interviews)
     .where(eq(interviews.submissionId, input.submissionId))
     )[0]!.max;
+
+  // Whichever stage the configured pipeline calls the start of interviewing.
+  const interviewEntry = pipeline.entryOf("interviewing");
 
   db.transaction(async (tx) => {
     (await tx.insert(interviews)
@@ -179,9 +184,9 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
     // Booking a round moves the candidate to Interview Scheduled, but never
     // drags anyone backwards — someone already at Selected or Offer who picks up
     // an extra round keeps the stage they earned.
-    if (!atOrPast(ctx.submission.stage as Stage, "interview_scheduled")) {
+    if (!pipeline.atOrPastKind(ctx.submission.stage, "interviewing")) {
       (await tx.update(submissions)
-        .set({ stage: "interview_scheduled", stageSince: now, updatedAt: now })
+        .set({ stage: interviewEntry, stageSince: now, updatedAt: now })
         .where(eq(submissions.id, input.submissionId))
         );
 
@@ -190,7 +195,7 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
           id: newId("stg"),
           submissionId: input.submissionId,
           fromStage: ctx.submission.stage,
-          toStage: "interview_scheduled",
+          toStage: interviewEntry,
           actorId: actor.id,
           note: `Advanced when ${input.title} was scheduled`,
           createdAt: now,

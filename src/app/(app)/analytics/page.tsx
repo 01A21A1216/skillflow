@@ -17,7 +17,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Meter } from "@/components/ui/misc";
 import { Table, TableShell, Td, Th, Tr } from "@/components/ui/table";
-import { SOURCE, STAGE, type Source, type Stage } from "@/lib/domain";
+import { SOURCE, type Source } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { formatNumber, formatPercent, pluralize } from "@/lib/utils";
 import {
   clientBreakdown,
@@ -51,6 +52,7 @@ export default async function AnalyticsPage({
   const get = (k: string) => (Array.isArray(params[k]) ? params[k][0] : params[k]);
 
   await requirePermission("report.view");
+  const pipeline = await loadPipeline();
   const period = resolvePeriod(get("period"));
   const since = period.key === "all" ? undefined : period.since;
 
@@ -132,7 +134,7 @@ export default async function AnalyticsPage({
               rows: steps.map((s) => [
                 s.label,
                 formatNumber(s.count),
-                `${Math.round(s.stepConversion)}%`,
+                s.stepConversion === null ? "—" : `${Math.round(s.stepConversion)}%`,
                 `${Math.round(s.overallConversion)}%`,
                 formatNumber(s.dropOff),
               ]),
@@ -609,11 +611,11 @@ export default async function AnalyticsPage({
           Funnel figures count distinct submissions that reached each stage, so a candidate who
           moves backwards and forwards is only counted once per stage.{" "}
           {pluralize(submitted, "submission")} reached the hiring manager in this window, across{" "}
-          {pluralize(aging.byStage.reduce((s, b) => s + b.count, 0), "live candidate")} currently in
+          {pluralize(aging.byStage.reduce((n, b) => n + b.count, 0), "live candidate")} currently in
           play. Stage labels:{" "}
-          {(Object.keys(STAGE) as Stage[])
+          {pipeline.live
             .slice(0, 6)
-            .map((s) => STAGE[s].label)
+            .map((s) => s.label)
             .join(" → ")}
           .
         </p>

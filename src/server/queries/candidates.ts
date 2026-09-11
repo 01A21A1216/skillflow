@@ -18,7 +18,7 @@ import {
   submissions,
   users,
 } from "@/db/schema";
-import { ACTIVE_STAGES } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { redactCandidate } from "@/server/authz";
@@ -68,7 +68,7 @@ export interface CandidateRow {
   furthestStage: string | null;
 }
 
-const ACTIVE_SET = ACTIVE_STAGES as readonly string[];
+
 const STAGE_RANK: Record<string, number> = {
   sourced: 0,
   screening: 1,
@@ -92,11 +92,13 @@ async function submissionSummary() {
     .groupBy(submissions.candidateId, submissions.stage, submissions.status)
     );
 
+  const pipeline = await loadPipeline();
+  const activeSet = new Set(pipeline.active);
   const map = new Map<string, { active: number; total: number; furthest: string | null }>();
   for (const r of rows) {
     const entry = map.get(r.candidateId) ?? { active: 0, total: 0, furthest: null };
     entry.total += r.count;
-    if (r.status === "active" && ACTIVE_SET.includes(r.stage)) entry.active += r.count;
+    if (r.status === "active" && activeSet.has(r.stage)) entry.active += r.count;
     const rank = STAGE_RANK[r.stage] ?? -1;
     if (rank >= 0 && (entry.furthest === null || rank > (STAGE_RANK[entry.furthest] ?? -1))) {
       entry.furthest = r.stage;

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { listCandidates } from "@/server/queries/candidates";
 import { listRequisitions } from "@/server/queries/requisitions";
 import { listUsers } from "@/server/queries/people";
-import { STAGE, type Stage } from "@/lib/domain";
+import { loadPipeline } from "@/server/pipeline";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +19,8 @@ export interface SearchHit {
 export async function GET(request: Request) {
   const term = new URL(request.url).searchParams.get("q")?.trim() ?? "";
   if (term.length < 2) return NextResponse.json({ hits: [] });
+
+  const pipeline = await loadPipeline();
 
   const hits: SearchHit[] = [];
 
@@ -39,7 +41,7 @@ export async function GET(request: Request) {
       kind: "candidate",
       title: `${c.firstName} ${c.lastName}`,
       subtitle: `${c.currentTitle} at ${c.currentCompany}`,
-      meta: c.furthestStage ? STAGE[c.furthestStage as Stage]?.label : undefined,
+      meta: c.furthestStage ? pipeline.label(c.furthestStage) : undefined,
       href: `/candidates/${c.id}`,
     });
   }

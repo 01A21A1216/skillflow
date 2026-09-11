@@ -13,14 +13,8 @@ import {
 } from "lucide-react";
 
 import type { PipelineCard } from "@/server/queries/pipeline";
-import {
-  PIPELINE_STAGES,
-  REJECTION_REASONS,
-  STAGE,
-  atOrPast,
-  stageIndex,
-  type Stage,
-} from "@/lib/domain";
+import { REJECTION_REASONS, type Stage } from "@/lib/domain";
+import { usePipeline } from "./pipeline-context";
 import {
   holdSubmission,
   moveStage,
@@ -91,7 +85,10 @@ export function MoveStageModal({
   currentStage: Stage;
 }) {
   const router = useRouter();
-  const next = PIPELINE_STAGES[Math.min(stageIndex(currentStage) + 1, PIPELINE_STAGES.length - 1)]!;
+  const pipeline = usePipeline();
+  // Default to the next stage along, which is what the button is nearly always
+  // used for; everything else is still one click away in the list.
+  const next = pipeline.live[Math.min(pipeline.index(currentStage) + 1, pipeline.live.length - 1)]!;
 
   return (
     <FormModal
@@ -99,7 +96,7 @@ export function MoveStageModal({
       onClose={onClose}
       size="sm"
       title="Move candidate"
-      description={`${candidateName} is currently in ${STAGE[currentStage].label.toLowerCase()}.`}
+      description={`${candidateName} is currently in ${pipeline.label(currentStage).toLowerCase()}.`}
       action={moveStage}
       submitLabel="Move"
       onSuccess={() => router.refresh()}
@@ -108,11 +105,11 @@ export function MoveStageModal({
         <>
           <input type="hidden" name="submissionId" value={submissionId} />
           <Field label="Move to" error={errors.stage}>
-            <Select name="stage" defaultValue={next.value}>
-              {PIPELINE_STAGES.map((s) => (
-                <option key={s.value} value={s.value} disabled={s.value === currentStage}>
+            <Select name="stage" defaultValue={next.key}>
+              {pipeline.live.map((s) => (
+                <option key={s.key} value={s.key} disabled={s.key === currentStage}>
                   {s.label}
-                  {s.value === currentStage ? " (current)" : ""}
+                  {s.key === currentStage ? " (current)" : ""}
                 </option>
               ))}
             </Select>
@@ -266,6 +263,7 @@ export function ReopenModal({
   wasOnHold: boolean;
 }) {
   const router = useRouter();
+  const pipeline = usePipeline();
 
   return (
     <FormModal
@@ -283,17 +281,17 @@ export function ReopenModal({
           <input type="hidden" name="submissionId" value={submissionId} />
           {wasOnHold ? (
             <>
-              <input type="hidden" name="stage" value="screening" />
+              <input type="hidden" name="stage" value={pipeline.order[1] ?? pipeline.order[0]} />
               <p className="text-[13px] leading-relaxed text-content-muted">
                 They go back to the stage they were on when they were put on hold.
               </p>
             </>
           ) : (
             <Field label="Restart at" error={errors.stage}>
-              <Select name="stage" defaultValue="screening">
-                {PIPELINE_STAGES.filter((st) => st.value !== "joined").map((st) => (
-                  <option key={st.value} value={st.value}>
-                    {st.label}
+              <Select name="stage" defaultValue={pipeline.order[1] ?? pipeline.order[0]}>
+                {pipeline.active.map((key) => (
+                  <option key={key} value={key}>
+                    {pipeline.label(key)}
                   </option>
                 ))}
               </Select>
@@ -314,6 +312,8 @@ type Dialog = "move" | "reject" | "hold" | "reopen" | "interview" | "offer" | nu
 export function CardActions({ card }: { card: PipelineCard }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const { interviewers, coordinators, capabilities } = usePipelineOptions();
+  // An offer only makes sense once the client has actually seen them.
+  const canDraftOffer = usePipeline().atOrPastKind(card.stage, "submitted");
 
   // Nothing this actor can do from here — do not render a dead menu.
   if (!capabilities.move && !capabilities.close && !capabilities.schedule && !capabilities.draftOffer) {
@@ -362,7 +362,7 @@ export function CardActions({ card }: { card: PipelineCard }) {
               {capabilities.draftOffer ? (
                 <MenuItem
                   icon={<FileSignature className="size-3.5" />}
-                  disabled={!atOrPast(card.stage, "submitted") || Boolean(card.offerStatus)}
+                  disabled={!canDraftOffer || Boolean(card.offerStatus)}
                   onClick={() => {
                     close();
                     setDialog("offer");

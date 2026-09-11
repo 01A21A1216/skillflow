@@ -57,7 +57,7 @@ export function parseForm<T extends z.ZodTypeAny>(
   }
 
   // Unchecked checkboxes are simply absent from FormData.
-  for (const key of ["willingToRelocate", "pinned"]) {
+  for (const key of ["willingToRelocate", "pinned", "active"]) {
     if (key in raw) raw[key] = raw[key] === "on" || raw[key] === "true";
   }
 

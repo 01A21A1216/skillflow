@@ -18,7 +18,7 @@ import {
   REQ_STATUS,
   SENIORITY,
   SOURCE,
-  STAGE,
+  STAGE_KIND,
   SUBMISSION_STATUS,
   USER_ROLE,
   WORK_AUTHORIZATION,
@@ -60,8 +60,8 @@ function metaBadge(map: AnyMeta, fallbackTone: Tone = "neutral") {
   };
 }
 
-export const StageBadge = metaBadge(STAGE as AnyMeta);
 export const SubmissionStatusBadge = metaBadge(SUBMISSION_STATUS as AnyMeta);
+export const StageKindBadge = metaBadge(STAGE_KIND as AnyMeta);
 export const ReqStatusBadge = metaBadge(REQ_STATUS as AnyMeta);
 export const PriorityBadge = metaBadge(PRIORITY as AnyMeta);
 export const EmploymentBadge = metaBadge(EMPLOYMENT_TYPE as AnyMeta);
@@ -233,3 +233,7 @@ export function MetaRow({
     </dl>
   );
 }
+
+// A stage's label and tone are configuration, so its badge lives with the
+// provider that supplies them.
+export { StageBadge } from "./pipeline-context";
