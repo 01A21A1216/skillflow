@@ -852,6 +852,7 @@ export const ACTIVITY_TYPES = {
   attachment_added: { label: "File attached", tone: "cyan" as Tone },
   attachment_removed: { label: "File removed", tone: "slate" as Tone },
   settings_changed: { label: "Settings changed", tone: "violet" as Tone },
+  signed_in: { label: "Signed in", tone: "neutral" as Tone },
 } as const;
 
 export type ActivityType = keyof typeof ACTIVITY_TYPES;

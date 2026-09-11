@@ -115,6 +115,7 @@ const RECRUITER_CORE = [
   "attachment.view",
   "attachment.upload",
   "attachment.delete",
+  "audit.view",
   "offer.view",
   "offer.create",
   "offer.edit",
@@ -213,6 +214,7 @@ export const ROLES: readonly RoleDef[] = [
       "team.view",
       "report.view",
       "report.export",
+      "audit.view",
     ],
   },
 ];

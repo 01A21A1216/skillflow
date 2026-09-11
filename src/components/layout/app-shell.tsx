@@ -10,6 +10,7 @@ import {
   CalendarDays,
   ChevronsLeft,
   FileSignature,
+  History,
   KanbanSquare,
   LayoutDashboard,
   Menu,
@@ -77,6 +78,7 @@ const NAV_SECONDARY = [
   { href: "/analytics", label: "Analytics", icon: BarChart3, anyOf: ["report.view"] },
   { href: "/clients", label: "Client accounts", icon: Building2, anyOf: ["client.view"] },
   { href: "/team", label: "Team", icon: UsersRound, anyOf: ["team.view"] },
+  { href: "/activity", label: "Activity", icon: History, anyOf: ["audit.view"] },
   { href: "/settings", label: "Settings", icon: Settings, anyOf: ["settings.manage"] },
 ];
 

@@ -21,6 +21,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 
 import * as s from "./schema";
+import type { FieldChange } from "./schema";
 import { PERMISSIONS, ROLES } from "../lib/permissions";
 import {
   AGENDA_TEMPLATES,
@@ -141,6 +142,8 @@ function activity(
   summary: string,
   createdAt: number,
   meta?: Record<string, unknown>,
+  /** Field-level diff, for the entries the audit view exists to show (§13). */
+  changes?: FieldChange[],
 ) {
   activities.push({
     id: id("act"),
@@ -150,6 +153,7 @@ function activity(
     actorId,
     summary,
     meta: meta ?? null,
+    changes: changes ?? null,
     createdAt: new Date(Math.min(createdAt, NOW)),
   });
 }
@@ -1076,13 +1080,20 @@ function buildSubmission(
     candidateId: candidate.id,
   });
   if (submittedAt) {
-    activity("submission", submissionId, "stage_changed", owner, `${who} submitted to ${req.title}`, submittedAt, {
-      requisitionId: req.id,
-      candidateId: candidate.id,
-      stage: "submitted",
-    });
+    const previous = STAGES[SI("submitted") - 1]!;
+    activity(
+      "submission",
+      submissionId,
+      "stage_changed",
+      owner,
+      `${who} submitted to ${req.title}`,
+      submittedAt,
+      { requisitionId: req.id, candidateId: candidate.id, stage: "submitted" },
+      [{ field: "stage", label: "Stage", from: previous, to: "submitted" }],
+    );
   }
   if (closedAt) {
+    const outcome = withdrew ? "withdrawn" : "rejected";
     activity(
       "submission",
       submissionId,
@@ -1091,6 +1102,10 @@ function buildSubmission(
       `${who} ${withdrew ? "withdrew from" : "was closed out of"} ${req.code}`,
       closedAt,
       { requisitionId: req.id, candidateId: candidate.id },
+      [
+        { field: "stage", label: "Stage", from: stageName, to: outcome },
+        { field: "status", label: "Status", from: "active", to: outcome },
+      ],
     );
   }
 
@@ -1469,6 +1484,8 @@ for (const plan of reqPlans) {
       req.leadRecruiterId!,
       `${req.code} marked ${status}`,
       new Date(req.closedAt).getTime(),
+      undefined,
+      [{ field: "status", label: "Status", from: "open", to: status }],
     );
   } else if (status === "on_hold") {
     activity(
@@ -1478,6 +1495,56 @@ for (const plan of reqPlans) {
       req.leadRecruiterId!,
       `${req.code} placed on hold`,
       NOW - int(2, 25) * DAY,
+      undefined,
+      [{ field: "status", label: "Status", from: "open", to: "on_hold" }],
+    );
+  }
+
+  // Requirements get revised in flight — a band moves, a seat is added, the
+  // priority is escalated. Without these the audit trail has plenty of events
+  // and almost no *changes*, which is the half that answers "what was it
+  // before?".
+  if (chance(0.45)) {
+    const editedAt = NOW - int(3, Math.max(4, Math.floor(ageDays * 0.7))) * DAY;
+    const edit = pick([
+      () => {
+        const from = req.maxSalary!;
+        const to = Math.round((from * 1.08) / 1000) * 1000;
+        req.maxSalary = to;
+        return { summary: "Salary maximum", changes: [{ field: "maxSalary", label: "Salary maximum", from, to }] };
+      },
+      () => {
+        const from = req.priority!;
+        const to = from === "critical" ? "high" : "critical";
+        req.priority = to;
+        return { summary: "Priority", changes: [{ field: "priority", label: "Priority", from, to }] };
+      },
+      () => {
+        const from = req.openings!;
+        const to = from + 1;
+        req.openings = to;
+        return { summary: "Openings", changes: [{ field: "openings", label: "Openings", from, to }] };
+      },
+      () => {
+        const from = req.targetFillDate ?? null;
+        const to = isoDay(NOW + int(14, 45) * DAY);
+        req.targetFillDate = to;
+        return {
+          summary: "Target fill date",
+          changes: [{ field: "targetFillDate", label: "Target fill date", from, to }],
+        };
+      },
+    ])();
+
+    activity(
+      "requisition",
+      req.id,
+      "requisition_updated",
+      req.leadRecruiterId!,
+      `${req.code}: ${edit.summary} changed`,
+      editedAt,
+      undefined,
+      edit.changes as FieldChange[],
     );
   }
 

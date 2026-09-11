@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, Minus } from "lucide-react";
 import {
   AVAILABILITY,
   CANDIDATE_STATUS,
+  ACTIVITY_TYPES,
   CLIENT_TIER,
   FEEDBACK_STATUS,
   EMPLOYMENT_TYPE,
@@ -81,6 +82,7 @@ export const RecommendationBadge = metaBadge(RECOMMENDATION as AnyMeta);
 export const OfferStatusBadge = metaBadge(OFFER_STATUS as AnyMeta);
 export const RoleBadge = metaBadge(USER_ROLE as AnyMeta);
 export const ClientTierBadge = metaBadge(CLIENT_TIER as AnyMeta);
+export const ActivityTypeBadge = metaBadge(ACTIVITY_TYPES as AnyMeta);
 
 /** Health pill for a requisition, with the reason as its tooltip. */
 export function HealthBadge({

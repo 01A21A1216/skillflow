@@ -104,7 +104,7 @@ export async function signIn(_prev: ActionState, formData: FormData): Promise<Ac
   await logActivity({
     entityType: "user",
     entityId: user.id,
-    type: "note_added",
+    type: "signed_in",
     actorId: user.id,
     summary: `${user.name} signed in`,
   });
