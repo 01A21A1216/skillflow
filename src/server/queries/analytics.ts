@@ -191,6 +191,41 @@ export async function timeToHire(since?: Date): Promise<TimeToHire> {
   };
 }
 
+/**
+ * Time to interview (§19).
+ *
+ * Measured from the submission being created to its first interview actually
+ * being booked — which is the number a client asks about when a shortlist
+ * seems to be going nowhere. Rounds that were later cancelled still count:
+ * the desk did the work of arranging one.
+ */
+export async function timeToInterview(since?: Date) {
+  const rows = (await db
+    .select({
+      createdAt: submissions.createdAt,
+      firstInterviewAt: sql<Date | null>`min(${interviews.createdAt})`,
+    })
+    .from(submissions)
+    .innerJoin(interviews, eq(interviews.submissionId, submissions.id))
+    .where(since ? gte(submissions.createdAt, since) : undefined)
+    .groupBy(submissions.id, submissions.createdAt)
+    );
+
+  const days: number[] = [];
+  for (const r of rows) {
+    if (!r.firstInterviewAt) continue;
+    const d = daysBetween(r.createdAt, r.firstInterviewAt);
+    if (d >= 0 && d < 400) days.push(d);
+  }
+
+  return {
+    days,
+    avg: average(days),
+    median: median(days),
+    samples: days.length,
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * Trends
  * ------------------------------------------------------------------ */
