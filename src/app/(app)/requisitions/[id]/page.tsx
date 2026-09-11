@@ -62,7 +62,7 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const detail = getRequisition(id);
+  const detail = await getRequisition(id);
   return { title: detail ? `${detail.req.code} · ${detail.req.title}` : "Requisition" };
 }
 
@@ -75,22 +75,22 @@ export default async function RequisitionDetailPage({
   const actor = await requirePermission("requisition.view.assigned");
   // Out of scope reads as "not found" rather than "forbidden", so the page
   // does not confirm the existence of a record the actor may not see.
-  const detail = getRequisition(id, actor);
+  const detail = await getRequisition(id, actor);
   if (!detail) notFound();
 
   const { req, client, recruiter, hiringManager, team, pipeline, interviews, offers, notes } = detail;
 
-  const summary = listRequisitions({ status: "all" }, actor).find((r) => r.id === id)!;
+  const summary = (await listRequisitions({ status: "all" }, actor)).find((r) => r.id === id)!;
   const health = requisitionHealth(summary);
-  const cards = pipelineCards({ requisition: id }, actor);
-  const activity = requisitionActivity(id, 25);
-  const facets = requisitionFacets();
-  const people = listUsers();
+  const cards = await pipelineCards({ requisition: id }, actor);
+  const activity = await requisitionActivity(id, 25);
+  const facets = await requisitionFacets();
+  const people = await listUsers();
 
   const closedOut = pipeline.filter((p) => ["rejected", "withdrawn"].includes(p.submission.status));
   const hires = pipeline.filter((p) => p.submission.status === "hired");
   // Asking the query layer keeps the clock out of the component render.
-  const upcoming = listInterviews({ window: "upcoming", requisition: id, status: "scheduled" }, actor);
+  const upcoming = await listInterviews({ window: "upcoming", requisition: id, status: "scheduled" }, actor);
 
   const rejectionTally = new Map<string, number>();
   for (const p of closedOut) {
@@ -147,7 +147,7 @@ export default async function RequisitionDetailPage({
               options={{
                 clients: facets.clients,
                 recruiters: facets.recruiters,
-                hiringManagers: hiringManagerOptions(),
+                hiringManagers: await hiringManagerOptions(),
                 departments: facets.departments,
               }}
             />

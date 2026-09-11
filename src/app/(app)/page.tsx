@@ -44,10 +44,10 @@ const ACTION_TONE = {
 
 export default async function DashboardPage() {
   const actor = await requireUser();
-  const snapshot = dashboardSnapshot(actor);
-  const actions = actionQueue(10, actor);
-  const attention = attentionList(5, actor);
-  const activity = recentActivity(12, undefined, actor);
+  const snapshot = await dashboardSnapshot(actor);
+  const actions = await actionQueue(10, actor);
+  const attention = await attentionList(5, actor);
+  const activity = await recentActivity(12, undefined, actor);
 
   const now = new Date();
   const greeting =

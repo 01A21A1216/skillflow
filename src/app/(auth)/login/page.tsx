@@ -16,30 +16,35 @@ export const metadata: Metadata = { title: "Sign in" };
  * The demo account list is a development convenience only. It is compiled out
  * in production builds so a deployed instance never advertises credentials.
  */
-function demoAccounts() {
+async function demoAccounts() {
   if (process.env.NODE_ENV === "production") return [];
-  return ROLES.map((role) => {
-    const person = db
-      .select({ name: users.name, email: users.email, title: users.title })
-      .from(users)
-      .where(eq(users.role, role.key))
-      .get();
-    return person ? { role: role.label, ...person } : null;
-  }).filter((r): r is NonNullable<typeof r> => Boolean(r));
+
+  const rows = await Promise.all(
+    ROLES.map(async (role) => {
+      const person = (
+        await db
+          .select({ name: users.name, email: users.email, title: users.title })
+          .from(users)
+          .where(eq(users.role, role.key))
+          .limit(1)
+      )[0];
+      return person ? { role: role.label, ...person } : null;
+    }),
+  );
+  return rows.filter((r): r is NonNullable<typeof r> => Boolean(r));
 }
 
 export default async function LoginPage() {
   if (await currentUser()) redirect("/");
 
-  const anyUsers = db.select({ id: users.id }).from(users).limit(1).all().length > 0;
   const seeded =
-    anyUsers &&
-    db
-      .select({ id: users.id })
-      .from(users)
-      .where(inArray(users.role, ROLES.map((r) => r.key)))
-      .limit(1)
-      .all().length > 0;
+    (
+      await db
+        .select({ id: users.id })
+        .from(users)
+        .where(inArray(users.role, ROLES.map((r) => r.key)))
+        .limit(1)
+    ).length > 0;
 
   return (
     <div className="w-full max-w-sm">
@@ -77,8 +82,8 @@ export default async function LoginPage() {
   );
 }
 
-function DemoAccounts() {
-  const accounts = demoAccounts();
+async function DemoAccounts() {
+  const accounts = await demoAccounts();
   if (!accounts.length) return null;
 
   return (

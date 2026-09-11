@@ -1,13 +1,8 @@
 import "server-only";
 
-import {
-  createHash,
-  randomBytes,
-  scrypt as scryptCb,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, lt } from "drizzle-orm";
 
 import { db } from "@/db";
 import { sessions, users, type User } from "@/db/schema";
@@ -90,73 +85,75 @@ export function newId(prefix: string) {
   return `${prefix}_${randomBytes(9).toString("hex")}`;
 }
 
-export function createSession(userId: string, userAgent?: string) {
+export async function createSession(userId: string, userAgent?: string) {
   const token = randomBytes(32).toString("base64url");
   const now = new Date();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
 
-  db.insert(sessions)
-    .values({
-      id: newId("ses"),
-      userId,
-      tokenHash: hashToken(token),
-      userAgent: userAgent?.slice(0, 300) ?? null,
-      createdAt: now,
-      lastSeenAt: now,
-      expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
-    })
-    .run();
+  await db.insert(sessions).values({
+    id: newId("ses"),
+    userId,
+    tokenHash: hashToken(token),
+    userAgent: userAgent?.slice(0, 300) ?? null,
+    createdAt: now,
+    lastSeenAt: now,
+    expiresAt,
+  });
 
-  db.update(users).set({ lastLoginAt: now }).where(eq(users.id, userId)).run();
+  await db.update(users).set({ lastLoginAt: now }).where(eq(users.id, userId));
 
-  return { token, expiresAt: new Date(now.getTime() + SESSION_TTL_MS) };
+  return { token, expiresAt };
 }
 
 /** Resolve a raw cookie token to its user, or null. Refreshes the sliding expiry. */
-export function resolveSession(token: string | undefined): User | null {
+export async function resolveSession(token: string | undefined): Promise<User | null> {
   if (!token) return null;
 
-  const row = db
-    .select({ session: sessions, user: users })
-    .from(sessions)
-    .innerJoin(users, eq(users.id, sessions.userId))
-    .where(
-      and(
-        eq(sessions.tokenHash, hashToken(token)),
-        isNull(sessions.revokedAt),
-        gt(sessions.expiresAt, new Date()),
-      ),
-    )
-    .get();
+  const row = (
+    await db
+      .select({ session: sessions, user: users })
+      .from(sessions)
+      .innerJoin(users, eq(users.id, sessions.userId))
+      .where(
+        and(
+          eq(sessions.tokenHash, hashToken(token)),
+          isNull(sessions.revokedAt),
+          gt(sessions.expiresAt, new Date()),
+        ),
+      )
+      .limit(1)
+  )[0];
 
-  if (!row || !row.user.active) return null;
+  // A deactivated or soft-deleted account must not keep a live session.
+  if (!row || !row.user.active || row.user.deletedAt) return null;
 
   const now = Date.now();
   if (now - row.session.lastSeenAt.getTime() > SLIDING_REFRESH_MS) {
-    db.update(sessions)
+    await db
+      .update(sessions)
       .set({ lastSeenAt: new Date(now), expiresAt: new Date(now + SESSION_TTL_MS) })
-      .where(eq(sessions.id, row.session.id))
-      .run();
+      .where(eq(sessions.id, row.session.id));
   }
 
   return row.user;
 }
 
-export function revokeSession(token: string | undefined) {
+export async function revokeSession(token: string | undefined) {
   if (!token) return;
-  db.update(sessions)
+  await db
+    .update(sessions)
     .set({ revokedAt: new Date() })
-    .where(eq(sessions.tokenHash, hashToken(token)))
-    .run();
+    .where(eq(sessions.tokenHash, hashToken(token)));
 }
 
 /** Revoke every session for a user — used when a role changes or on demand. */
-export function revokeAllSessions(userId: string) {
-  db.update(sessions)
+export async function revokeAllSessions(userId: string) {
+  await db
+    .update(sessions)
     .set({ revokedAt: new Date() })
-    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-    .run();
+    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
 }
 
-export function purgeExpiredSessions() {
-  db.delete(sessions).where(gt(new Date() as never, sessions.expiresAt)).run();
+export async function purgeExpiredSessions() {
+  await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
 }

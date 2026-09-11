@@ -49,7 +49,12 @@ export function CandidateFormModal({
     >
       {({ errors }) => (
         <>
-          {editing ? <input type="hidden" name="candidateId" value={candidate!.id} /> : null}
+          {editing ? (
+            <>
+              <input type="hidden" name="candidateId" value={candidate!.id} />
+              <input type="hidden" name="rowVersion" value={candidate!.rowVersion} />
+            </>
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="First name" required error={errors.firstName}>

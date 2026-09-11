@@ -62,12 +62,12 @@ export default async function CandidatesPage({
   };
 
   const actor = await requirePermission("candidate.view.all");
-  const all = listCandidates(filters, actor);
+  const all = await listCandidates(filters, actor);
   const page = Math.max(1, Number(get("page") ?? 1) || 1);
   const totalPages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
   const rows = all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  const facets = candidateFacets();
+  const facets = await candidateFacets();
   const inPlay = all.filter((c) => c.activeSubmissions > 0).length;
 
   const qs = (next: number) => {

@@ -11,10 +11,8 @@ next-env.d.ts
 # production
 /build
 
-# local database (regenerate with `npm run db:reset`)
-/data/*.db
-/data/*.db-wal
-/data/*.db-shm
+# the database now lives in the Postgres container (see docker-compose.yml)
+/data/
 
 # misc
 .DS_Store

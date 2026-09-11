@@ -18,8 +18,8 @@ export const metadata: Metadata = { title: "Client accounts" };
 
 export default async function ClientsPage() {
   await requirePermission("client.view");
-  const rows = clientBreakdown();
-  const tiers = new Map(clientOptions().map((c) => [c.id, c.tier]));
+  const rows = await clientBreakdown();
+  const tiers = new Map((await clientOptions()).map((c) => [c.id, c.tier]));
 
   const totalOpen = rows.reduce((s, c) => s + c.openReqs, 0);
   const totalPipeline = rows.reduce((s, c) => s + c.activePipeline, 0);

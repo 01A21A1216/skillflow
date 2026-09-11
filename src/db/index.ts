@@ -1,45 +1,48 @@
 import "server-only";
 
-import fs from "node:fs";
-import path from "node:path";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 
 import * as schema from "./schema";
 
-const DB_DIR = path.join(process.cwd(), "data");
-const DB_PATH = process.env.DATABASE_PATH ?? path.join(DB_DIR, "rcc.db");
-const MIGRATIONS_DIR = path.join(process.cwd(), "drizzle");
+/**
+ * Postgres connection pool.
+ *
+ * A pool rather than a single connection because the product requirement is
+ * that several recruiters work at once: SQLite served this app well as a
+ * single-writer store, but "all updates must immediately appear for other
+ * authorized users" needs concurrent writers and, later, LISTEN/NOTIFY.
+ *
+ * Next.js re-evaluates modules on hot reload, so the pool is cached on
+ * globalThis to avoid leaking a new pool on every edit.
+ */
 
-function createConnection() {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+const CONNECTION =
+  process.env.DATABASE_URL ?? "postgres://rcc:rcc_local_dev@localhost:5433/rcc";
 
-  const sqlite = new Database(DB_PATH);
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
-  sqlite.pragma("busy_timeout = 5000");
+function createPool() {
+  const pool = new Pool({
+    connectionString: CONNECTION,
+    max: Number(process.env.DATABASE_POOL_MAX ?? 10),
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
+  });
 
-  const db = drizzle(sqlite, { schema });
+  // A pool error would otherwise be an unhandled rejection and take the
+  // process down; a dropped backend should just retire that client.
+  pool.on("error", (error) => {
+    console.error("[db] idle client error:", error.message);
+  });
 
-  if (fs.existsSync(MIGRATIONS_DIR)) {
-    migrate(db, { migrationsFolder: MIGRATIONS_DIR });
-  }
-
-  return { sqlite, db };
+  return pool;
 }
 
-/**
- * Next.js dev mode re-evaluates modules on every hot reload. Cache the
- * connection on globalThis so we keep exactly one SQLite handle per process.
- */
 const globalForDb = globalThis as unknown as {
-  __rccDb?: ReturnType<typeof createConnection>;
+  __rccPool?: Pool;
 };
 
-const connection = globalForDb.__rccDb ?? createConnection();
-if (process.env.NODE_ENV !== "production") globalForDb.__rccDb = connection;
+const pool = globalForDb.__rccPool ?? createPool();
+if (process.env.NODE_ENV !== "production") globalForDb.__rccPool = pool;
 
-export const db = connection.db;
-export const sqlite = connection.sqlite;
-export { schema };
+export const db = drizzle(pool, { schema });
+export { pool, schema, CONNECTION };

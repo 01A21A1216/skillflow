@@ -9,6 +9,7 @@ import type { User } from "@/db/schema";
 import { STAGE, stageIndex, type Stage } from "@/lib/domain";
 import { addToPipelineSchema, moveStageSchema, rejectSchema, reopenSchema } from "@/lib/validation";
 import { canTouchRequisition } from "@/server/authz";
+import { stamp, stampNew } from "@/server/integrity";
 import {
   denied,
   fail,
@@ -30,21 +31,21 @@ function revalidateEverywhere(requisitionId?: string, candidateId?: string) {
 }
 
 /** Keep `requisitions.filled` and its status honest after any hire change. */
-function syncRequisitionFill(requisitionId: string) {
-  const req = db.select().from(requisitions).where(eq(requisitions.id, requisitionId)).get();
+async function syncRequisitionFill(requisitionId: string) {
+  const req = (await db.select().from(requisitions).where(eq(requisitions.id, requisitionId)))[0];
   if (!req) return;
 
-  const hires = db
-    .select({ count: sql<number>`count(*)` })
+  const hires = (await db
+    .select({ count: sql<number>`count(*)::int` })
     .from(submissions)
     .where(and(eq(submissions.requisitionId, requisitionId), eq(submissions.status, "hired")))
-    .get()!.count;
+    )[0]!.count;
 
   const filled = Math.min(hires, req.openings);
   const shouldClose = hires >= req.openings;
   const isOpenish = ["open", "on_hold", "draft"].includes(req.status);
 
-  db.update(requisitions)
+  (await db.update(requisitions)
     .set({
       filled,
       status: shouldClose && isOpenish ? "filled" : !shouldClose && req.status === "filled" ? "open" : req.status,
@@ -52,7 +53,7 @@ function syncRequisitionFill(requisitionId: string) {
       updatedAt: new Date(),
     })
     .where(eq(requisitions.id, requisitionId))
-    .run();
+    );
 }
 
 async function addToPipelineImpl(actor: User, formData: FormData): Promise<ActionState> {
@@ -60,19 +61,19 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const candidate = db.select().from(candidates).where(eq(candidates.id, input.candidateId)).get();
-  const req = db.select().from(requisitions).where(eq(requisitions.id, input.requisitionId)).get();
+  const candidate = (await db.select().from(candidates).where(eq(candidates.id, input.candidateId)))[0];
+  const req = (await db.select().from(requisitions).where(eq(requisitions.id, input.requisitionId)))[0];
   if (!candidate) return fail("That candidate no longer exists.");
   if (!req) return fail("That requisition no longer exists.");
-  if (!canTouchRequisition(actor, req.id)) return denied("that requisition");
+  if (!await canTouchRequisition(actor, req.id)) return denied("that requisition");
 
-  const duplicate = db
+  const duplicate = (await db
     .select()
     .from(submissions)
     .where(
       and(eq(submissions.candidateId, input.candidateId), eq(submissions.requisitionId, input.requisitionId)),
     )
-    .get();
+    )[0];
 
   if (duplicate) {
     return fail(`${candidate.firstName} is already on ${req.code}.`, {
@@ -84,8 +85,8 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
   const now = new Date();
   const stage = input.stage as Stage;
 
-  db.transaction((tx) => {
-    tx.insert(submissions)
+  db.transaction(async (tx) => {
+    (await tx.insert(submissions)
       .values({
         id,
         candidateId: input.candidateId,
@@ -96,16 +97,15 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
         matchScore: input.matchScore,
         submittedAt: stageIndex(stage) >= 2 ? now : null,
         stageSince: now,
-        createdAt: now,
-        updatedAt: now,
+        ...stampNew(actor.id),
       })
-      .run();
+      );
 
     // Backfill the stages this candidate is being dropped past, so funnel
     // analytics and the timeline stay consistent.
     const path = ["sourced", "screening", "submitted", "interview", "offer"] as Stage[];
     for (const s of path.slice(0, stageIndex(stage) + 1)) {
-      tx.insert(stageEvents)
+      (await tx.insert(stageEvents)
         .values({
           id: newId("stg"),
           submissionId: id,
@@ -115,19 +115,19 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
           note: s === stage ? (input.note ?? null) : null,
           createdAt: now,
         })
-        .run();
+        );
     }
 
     if (candidate.status === "new" || candidate.status === "passive") {
-      tx.update(candidates)
+      (await tx.update(candidates)
         .set({ status: "active", updatedAt: now })
         .where(eq(candidates.id, candidate.id))
-        .run();
+        );
     }
   });
 
   if (input.note) {
-    db.insert(notes)
+    (await db.insert(notes)
       .values({
         id: newId("not"),
         entityType: "submission",
@@ -137,10 +137,10 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
         pinned: false,
         createdAt: now,
       })
-      .run();
+      );
   }
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: id,
     type: "submission_created",
@@ -158,13 +158,13 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   if (!parsed.success) return parsed.state;
   const { submissionId, stage, note } = parsed.data;
 
-  const row = db
+  const row = (await db
     .select({ submission: submissions, candidate: candidates, requisition: requisitions })
     .from(submissions)
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(eq(submissions.id, submissionId))
-    .get();
+    )[0];
 
   if (!row) return fail("That submission no longer exists.");
   const { submission, candidate, requisition } = row;
@@ -177,8 +177,8 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   const hiring = target === "hired";
   const now = new Date();
 
-  db.transaction((tx) => {
-    tx.update(submissions)
+  db.transaction(async (tx) => {
+    (await tx.update(submissions)
       .set({
         stage: target,
         status: hiring ? "hired" : "active",
@@ -187,12 +187,12 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
         rejectedAt: null,
         submittedAt:
           stageIndex(target) >= 2 && !submission.submittedAt ? now : submission.submittedAt,
-        updatedAt: now,
+        ...stamp(actor.id, submission.rowVersion + 1),
       })
       .where(eq(submissions.id, submissionId))
-      .run();
+      );
 
-    tx.insert(stageEvents)
+    (await tx.insert(stageEvents)
       .values({
         id: newId("stg"),
         submissionId,
@@ -202,19 +202,19 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
         note: note ?? null,
         createdAt: now,
       })
-      .run();
+      );
 
     if (hiring) {
-      tx.update(candidates)
+      (await tx.update(candidates)
         .set({ status: "placed", updatedAt: now })
         .where(eq(candidates.id, candidate.id))
-        .run();
+        );
     }
   });
 
-  if (hiring || submission.status === "hired") syncRequisitionFill(requisition.id);
+  if (hiring || submission.status === "hired") await syncRequisitionFill(requisition.id);
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: submissionId,
     type: "stage_changed",
@@ -222,6 +222,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
     summary: hiring
       ? `${candidate.firstName} ${candidate.lastName} hired for ${requisition.title}`
       : `${candidate.firstName} ${candidate.lastName} moved to ${STAGE[target].label} on ${requisition.code}`,
+    changes: [{ field: "stage", label: "Stage", from: submission.stage, to: target }],
     meta: { requisitionId: requisition.id, candidateId: candidate.id, from: submission.stage, to: target },
   });
 
@@ -238,13 +239,13 @@ async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<Ac
   if (!parsed.success) return parsed.state;
   const { submissionId, outcome, reason, note } = parsed.data;
 
-  const row = db
+  const row = (await db
     .select({ submission: submissions, candidate: candidates, requisition: requisitions })
     .from(submissions)
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(eq(submissions.id, submissionId))
-    .get();
+    )[0];
 
   if (!row) return fail("That submission no longer exists.");
   const { submission, candidate, requisition } = row;
@@ -252,20 +253,20 @@ async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<Ac
 
   const now = new Date();
 
-  db.transaction((tx) => {
-    tx.update(submissions)
+  db.transaction(async (tx) => {
+    (await tx.update(submissions)
       .set({
         stage: outcome,
         status: outcome,
         rejectionReason: reason,
         rejectedAt: now,
         stageSince: now,
-        updatedAt: now,
+        ...stamp(actor.id, submission.rowVersion + 1),
       })
       .where(eq(submissions.id, submissionId))
-      .run();
+      );
 
-    tx.insert(stageEvents)
+    (await tx.insert(stageEvents)
       .values({
         id: newId("stg"),
         submissionId,
@@ -275,11 +276,11 @@ async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<Ac
         note: note ?? reason,
         createdAt: now,
       })
-      .run();
+      );
   });
 
   if (note) {
-    db.insert(notes)
+    (await db.insert(notes)
       .values({
         id: newId("not"),
         entityType: "submission",
@@ -289,10 +290,10 @@ async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<Ac
         pinned: false,
         createdAt: now,
       })
-      .run();
+      );
   }
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: submissionId,
     type: "submission_rejected",
@@ -300,6 +301,10 @@ async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<Ac
     summary: `${candidate.firstName} ${candidate.lastName} ${
       outcome === "withdrawn" ? "withdrew from" : "was closed out of"
     } ${requisition.code} — ${reason}`,
+    changes: [
+      { field: "stage", label: "Stage", from: submission.stage, to: outcome },
+      { field: "status", label: "Status", from: submission.status, to: outcome },
+    ],
     meta: { requisitionId: requisition.id, candidateId: candidate.id, reason },
   });
 
@@ -312,13 +317,13 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
   if (!parsed.success) return parsed.state;
   const { submissionId, stage } = parsed.data;
 
-  const row = db
+  const row = (await db
     .select({ submission: submissions, candidate: candidates, requisition: requisitions })
     .from(submissions)
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(eq(submissions.id, submissionId))
-    .get();
+    )[0];
 
   if (!row) return fail("That submission no longer exists.");
   const { submission, candidate, requisition } = row;
@@ -327,8 +332,8 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
   const now = new Date();
   const wasHired = submission.status === "hired";
 
-  db.transaction((tx) => {
-    tx.update(submissions)
+  db.transaction(async (tx) => {
+    (await tx.update(submissions)
       .set({
         stage,
         status: "active",
@@ -338,9 +343,9 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
         updatedAt: now,
       })
       .where(eq(submissions.id, submissionId))
-      .run();
+      );
 
-    tx.insert(stageEvents)
+    (await tx.insert(stageEvents)
       .values({
         id: newId("stg"),
         submissionId,
@@ -350,17 +355,17 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
         note: "Reopened",
         createdAt: now,
       })
-      .run();
+      );
 
-    tx.update(candidates)
+    (await tx.update(candidates)
       .set({ status: "active", updatedAt: now })
       .where(eq(candidates.id, candidate.id))
-      .run();
+      );
   });
 
-  if (wasHired) syncRequisitionFill(requisition.id);
+  if (wasHired) await syncRequisitionFill(requisition.id);
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: submissionId,
     type: "stage_changed",
@@ -373,13 +378,6 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
   return succeed("Candidate reopened");
 }
 
-/** Optimistic drag-and-drop target on the pipeline board. */
-export async function moveStageById(submissionId: string, stage: Stage) {
-  const formData = new FormData();
-  formData.set("submissionId", submissionId);
-  formData.set("stage", stage);
-  return moveStage({ ok: false }, formData);
-}
 
 
 /* ---- Guarded exports -------------------------------------------- *
@@ -390,3 +388,16 @@ export const addToPipeline = guarded("submission.create", addToPipelineImpl);
 export const moveStage = guarded("submission.move", moveStageImpl);
 export const rejectSubmission = guarded("submission.close", rejectSubmissionImpl);
 export const reopenSubmission = guarded("submission.move", reopenSubmissionImpl);
+
+/**
+ * Optimistic drag-and-drop target on the pipeline board.
+ *
+ * Declared after the guarded exports so it calls the permission-checked
+ * wrapper rather than the raw implementation.
+ */
+export async function moveStageById(submissionId: string, stage: Stage) {
+  const formData = new FormData();
+  formData.set("submissionId", submissionId);
+  formData.set("stage", stage);
+  return moveStage({ ok: false }, formData);
+}

@@ -29,11 +29,11 @@ export const addNote = guarded("note.create", async (actor, formData) => {
 
   const id = newId("not");
 
-  db.insert(notes)
+  (await db.insert(notes)
     .values({ id, entityType, entityId, authorId: actor.id, body, pinned, createdAt: new Date() })
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType,
     entityId,
     type: "note_added",
@@ -49,7 +49,7 @@ export const addNote = guarded("note.create", async (actor, formData) => {
 
 export const togglePinNote = guarded("note.create", async (actor, formData) => {
   const noteId = String(formData.get("noteId") ?? "");
-  const note = db.select().from(notes).where(eq(notes.id, noteId)).get();
+  const note = (await db.select().from(notes).where(eq(notes.id, noteId)))[0];
   if (!note) return fail("That note no longer exists.");
   // Authors pin their own notes; anyone curating the record needs the same
   // permission they would need to write one.
@@ -57,7 +57,7 @@ export const togglePinNote = guarded("note.create", async (actor, formData) => {
     return fail("You can only pin your own notes.");
   }
 
-  db.update(notes).set({ pinned: !note.pinned }).where(eq(notes.id, noteId)).run();
+  (await db.update(notes).set({ pinned: !note.pinned }).where(eq(notes.id, noteId)));
 
   if (note.entityType === "requisition") revalidatePath(`/requisitions/${note.entityId}`);
   if (note.entityType === "candidate") revalidatePath(`/candidates/${note.entityId}`);
@@ -76,7 +76,7 @@ export async function signIn(_prev: ActionState, formData: FormData): Promise<Ac
     return fail("Enter your email and password.");
   }
 
-  const user = db.select().from(users).where(eq(users.email, email)).get();
+  const user = (await db.select().from(users).where(eq(users.email, email)))[0];
 
   // Always spend the same time whether or not the account exists, so the form
   // cannot be used to enumerate valid email addresses.
@@ -90,7 +90,7 @@ export async function signIn(_prev: ActionState, formData: FormData): Promise<Ac
   }
 
   const agent = (await headers()).get("user-agent") ?? undefined;
-  const { token, expiresAt } = createSession(user.id, agent);
+  const { token, expiresAt } = await createSession(user.id, agent);
 
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
@@ -101,7 +101,7 @@ export async function signIn(_prev: ActionState, formData: FormData): Promise<Ac
     expires: expiresAt,
   });
 
-  logActivity({
+  await logActivity({
     entityType: "user",
     entityId: user.id,
     type: "note_added",
@@ -117,11 +117,11 @@ export async function signOut() {
   const token = store.get(SESSION_COOKIE)?.value;
   const actor = await currentUser();
 
-  revokeSession(token);
+  await revokeSession(token);
   store.delete(SESSION_COOKIE);
 
   if (actor) {
-    logActivity({
+    await logActivity({
       entityType: "user",
       entityId: actor.id,
       type: "note_added",

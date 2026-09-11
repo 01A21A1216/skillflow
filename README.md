@@ -10,9 +10,13 @@ simulated recruiting organisation so every screen has real, self-consistent data
 
 ```bash
 npm install
+npm run db:up      # start Postgres in Docker (port 5433)
 npm run db:reset   # create the schema and load the sample organisation
 npm run dev        # http://localhost:3000
 ```
+
+Postgres runs on **5433**, not the default 5432, so this project never collides
+with another database already running on your machine.
 
 ---
 
@@ -29,6 +33,7 @@ npm run dev        # http://localhost:3000
 | **Analytics** | Funnel with per-step conversion, stage velocity, time-to-fill and time-to-hire, 12-month throughput, source effectiveness, recruiter performance, pipeline aging, close-out reasons, interview operations and interviewer load. |
 | **Team / Clients** | Recruiter capacity and utilisation, interviewer load and feedback debt; client accounts with demand, coverage and fill rate. |
 | **Access control** | Sign-in, sessions, and the seven specified roles with a configurable permission matrix. What each person sees and can do is decided in the query and action layers, not the UI. |
+| **Data integrity** | Structured change history (field, before, after), soft delete with recovery, and optimistic concurrency so two recruiters editing one record cannot silently overwrite each other. |
 
 Cross-cutting: ⌘K global search, URL-driven filters (every view is shareable and
 survives a reload), light/dark themes, and an audit trail that attributes every write to
@@ -56,12 +61,12 @@ roles is the quickest way to see access control working:
 
 - **Next.js 16** (App Router, React Server Components, Server Actions)
 - **TypeScript** in strict mode
-- **SQLite** via **better-sqlite3**, with **Drizzle ORM** and generated migrations
+- **PostgreSQL 16** via **node-postgres**, with **Drizzle ORM** and generated migrations
 - **Tailwind CSS v4** on a semantic design-token layer
 - **Zod** for input validation, **Recharts** for charts, **dnd-kit** for the board
 
-No external services, no API keys, no container. `npm install && npm run db:reset` is the
-whole setup.
+No API keys and no cloud services — the only dependency is a Postgres container,
+started by `npm run db:up`.
 
 ---
 
@@ -117,6 +122,29 @@ are opaque tokens in an `HttpOnly` cookie; the database stores only their SHA-25
 so a dump of the sessions table cannot be replayed. Passwords use scrypt from
 `node:crypto`, and the sign-in path spends the same time on a missing account as a wrong
 password so it cannot be used to enumerate users.
+
+### Data integrity
+
+Three guarantees from the specification, implemented once in
+`src/server/integrity.ts` rather than re-derived in each action:
+
+- **Structured change history.** The audit trail records a sentence *and* a
+  `changes` array of `{field, label, from, to}`. Because the diff is computed
+  against the stored row, saving a form without editing anything is recorded as
+  "saved with no changes" instead of claiming an update that never happened.
+- **Soft delete.** Deleting stamps `deletedAt` and `deletedBy`; every read
+  filters them out. The row and everything anchored to it — stage events,
+  interviews, audit entries — survive, so a mistaken delete is recoverable and
+  history is never orphaned.
+- **Optimistic concurrency.** Each editable row carries a `rowVersion`. Forms
+  submit the version they were rendered with, and the action compares before
+  writing. A save built on a stale read is refused with a message telling the
+  user to reload, rather than quietly overwriting a colleague's work.
+
+Why Postgres: SQLite served the single-writer case well, but §1 requires several
+recruiters to work at once and see each other's updates. SQLite takes one writer
+at a time; Postgres does not, and it offers `LISTEN`/`NOTIFY` for the real-time
+work still in the backlog.
 
 ### Reads and writes
 
@@ -193,13 +221,15 @@ server is running (on Windows the server holds an open handle).
 | `npm run build` / `npm start` | Production build and serve |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
-| `npm test` | Vitest — currently the permission matrix |
+| `npm test` | Vitest — permission matrix and integrity rules (64 tests) |
+| `npm run db:up` / `db:down` | Start / stop the Postgres container |
 | `npm run db:generate` | Generate a migration from `schema.ts` |
 | `npm run db:seed` | Rebuild the database from the simulation |
 | `npm run db:reset` | Generate then seed |
 | `npm run db:studio` | Drizzle Studio against the local database |
 
-The database lives at `data/rcc.db`; override with `DATABASE_PATH`.
+The connection defaults to `postgres://rcc:rcc_local_dev@localhost:5433/rcc`;
+override with `DATABASE_URL`.
 
 ---
 
@@ -211,9 +241,11 @@ The database lives at `data/rcc.db`; override with `DATABASE_PATH`.
 - **The settings UI for editing the permission matrix is not built yet.** The matrix is
   stored in the database and seeded from code, so it is configurable by an administrator
   with database access but not yet through the app.
-- **Test coverage is narrow.** The permission matrix is covered; the action-layer business
-  rules (offer state machine, hire cascade) are not yet. See `BACKLOG.md` item 5.1.
-- **SQLite suits a single-node deployment.** The query layer is plain Drizzle, so moving to
-  Postgres is a dialect change plus a connection swap, not a rewrite.
+- **Test coverage is narrow.** The permission matrix and the integrity rules are covered;
+  the action-layer business rules (offer state machine, hire cascade) are not yet. See
+  `BACKLOG.md` item 5.1.
+- **Soft delete has no UI yet.** The columns, predicates and helpers exist and reads honour
+  them, but no screen offers "delete" or "restore" — nothing in the app deletes records
+  today.
 - Email, calendar and job-board integrations are out of scope; interviews record a meeting
   link rather than creating a real calendar event.

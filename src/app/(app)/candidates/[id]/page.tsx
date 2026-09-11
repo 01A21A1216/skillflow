@@ -53,7 +53,7 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const detail = getCandidate(id);
+  const detail = await getCandidate(id);
   return {
     title: detail ? `${detail.candidate.firstName} ${detail.candidate.lastName}` : "Candidate",
   };
@@ -66,14 +66,14 @@ export default async function CandidateDetailPage({
 }) {
   const { id } = await params;
   const actor = await requirePermission("candidate.view.all");
-  const detail = getCandidate(id, actor);
+  const detail = await getCandidate(id, actor);
   if (!detail) notFound();
 
   const { candidate: c, owner, submissions, interviews, feedback, offers, notes } = detail;
   const name = `${c.firstName} ${c.lastName}`;
-  const activity = candidateActivity(c.id, 25);
-  const openReqs = openRequisitionOptions(c.id);
-  const facets = candidateFacets();
+  const activity = await candidateActivity(c.id, 25);
+  const openReqs = await openRequisitionOptions(c.id);
+  const facets = await candidateFacets();
 
   const active = submissions.filter((s) => s.submission.status === "active");
   const hired = submissions.find((s) => s.submission.status === "hired");

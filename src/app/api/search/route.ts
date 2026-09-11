@@ -22,7 +22,7 @@ export async function GET(request: Request) {
 
   const hits: SearchHit[] = [];
 
-  for (const r of listRequisitions({ q: term }).slice(0, 6)) {
+  for (const r of (await listRequisitions({ q: term })).slice(0, 6)) {
     hits.push({
       id: r.id,
       kind: "requisition",
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     });
   }
 
-  for (const c of listCandidates({ q: term, sort: "rating" }).slice(0, 6)) {
+  for (const c of (await listCandidates({ q: term, sort: "rating" })).slice(0, 6)) {
     hits.push({
       id: c.id,
       kind: "candidate",
@@ -45,7 +45,7 @@ export async function GET(request: Request) {
   }
 
   const lower = term.toLowerCase();
-  for (const u of listUsers()
+  for (const u of (await listUsers())
     .filter((u) => u.name.toLowerCase().includes(lower) || u.title.toLowerCase().includes(lower))
     .slice(0, 3)) {
     hits.push({

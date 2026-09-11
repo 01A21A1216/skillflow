@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { candidates } from "@/db/schema";
 import type { User } from "@/db/schema";
 import { candidateSchema } from "@/lib/validation";
+import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
 import {
   fail,
   guarded,
@@ -22,7 +23,7 @@ async function createCandidateImpl(actor: User, formData: FormData): Promise<Act
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const clash = db.select().from(candidates).where(eq(candidates.email, input.email)).get();
+  const clash = (await db.select().from(candidates).where(eq(candidates.email, input.email)))[0];
   if (clash) {
     return fail("A candidate with that email already exists.", {
       email: `Already in the system as ${clash.firstName} ${clash.lastName}`,
@@ -31,7 +32,7 @@ async function createCandidateImpl(actor: User, formData: FormData): Promise<Act
 
   const id = newId("cnd");
 
-  db.insert(candidates)
+  (await db.insert(candidates)
     .values({
       id,
       firstName: input.firstName,
@@ -59,12 +60,11 @@ async function createCandidateImpl(actor: User, formData: FormData): Promise<Act
       tags: input.tags,
       rating: input.rating,
       lastContactedAt: new Date(),
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      ...stampNew(actor.id),
     })
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "candidate",
     entityId: id,
     type: "candidate_created",
@@ -84,16 +84,38 @@ async function updateCandidateImpl(actor: User, formData: FormData): Promise<Act
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const existing = db.select().from(candidates).where(eq(candidates.id, candidateId)).get();
+  const existing = (await db.select().from(candidates).where(eq(candidates.id, candidateId)))[0];
   if (!existing) return fail("That candidate no longer exists.");
 
-  const clash = db.select().from(candidates).where(eq(candidates.email, input.email)).get();
+  const clash = (await db.select().from(candidates).where(eq(candidates.email, input.email)))[0];
   if (clash && clash.id !== candidateId) {
     return fail("Another candidate already uses that email.", { email: "Email already in use" });
   }
 
 
-  db.update(candidates)
+  const nextVersion = checkVersion("Candidate", existing.rowVersion, formData.get("rowVersion"));
+
+  const changes = diffFields(existing, input, {
+    firstName: "First name",
+    lastName: "Last name",
+    email: "Email",
+    phone: "Phone",
+    location: "Location",
+    currentTitle: "Current title",
+    currentCompany: "Current company",
+    yearsExperience: "Experience",
+    seniority: "Level",
+    status: "Status",
+    source: "Source",
+    ownerId: "Owner",
+    expectedSalary: "Expected salary",
+    noticePeriodDays: "Notice period",
+    workAuthorization: "Work authorization",
+    rating: "Rating",
+    skills: "Skills",
+  });
+
+  (await db.update(candidates)
     .set({
       firstName: input.firstName,
       lastName: input.lastName,
@@ -118,17 +140,20 @@ async function updateCandidateImpl(actor: User, formData: FormData): Promise<Act
       summary: input.summary ?? "",
       tags: input.tags,
       rating: input.rating,
-      updatedAt: new Date(),
+      ...stamp(actor.id, nextVersion),
     })
     .where(eq(candidates.id, candidateId))
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "candidate",
     entityId: candidateId,
     type: "candidate_updated",
     actorId: actor.id,
-    summary: `${input.firstName} ${input.lastName} profile updated`,
+    summary: changes.length
+      ? `${input.firstName} ${input.lastName}: ${describeChanges(changes)}`
+      : `${input.firstName} ${input.lastName} saved with no changes`,
+    changes,
   });
 
   revalidatePath(`/candidates/${candidateId}`);
@@ -138,15 +163,15 @@ async function updateCandidateImpl(actor: User, formData: FormData): Promise<Act
 
 async function logContactImpl(actor: User, formData: FormData): Promise<ActionState> {
   const candidateId = String(formData.get("candidateId") ?? "");
-  const candidate = db.select().from(candidates).where(eq(candidates.id, candidateId)).get();
+  const candidate = (await db.select().from(candidates).where(eq(candidates.id, candidateId)))[0];
   if (!candidate) return fail("That candidate no longer exists.");
 
-  db.update(candidates)
+  (await db.update(candidates)
     .set({ lastContactedAt: new Date(), updatedAt: new Date() })
     .where(eq(candidates.id, candidateId))
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "candidate",
     entityId: candidateId,
     type: "candidate_updated",

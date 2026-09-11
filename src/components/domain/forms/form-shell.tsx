@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, type ReactNode } from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, RefreshCw } from "lucide-react";
 
 import type { ActionState } from "@/server/actions/shared";
 import { useToast } from "@/components/ui/toast";
@@ -31,8 +31,10 @@ export function useFormAction(
     if (state.ok) {
       toast({ kind: "success", title: state.message ?? "Saved" });
       opts.onSuccess?.(state);
-    } else if (state.message && !state.errors) {
+    } else if (state.message && !state.errors && !state.conflict) {
       toast({ kind: "error", title: "Could not save", description: state.message });
+    } else if (state.conflict) {
+      toast({ kind: "error", title: "Someone else saved first", description: state.message });
     }
     // `opts` is a fresh object each render; only the state transition matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -41,15 +43,32 @@ export function useFormAction(
   return { state, formAction, pending, errors: state.errors ?? {} };
 }
 
-export function FormError({ message }: { message?: string }) {
+export function FormError({ message, conflict }: { message?: string; conflict?: boolean }) {
   if (!message) return null;
+
+  // A lost write race is not a validation failure: it needs a reload, not a
+  // correction, so it reads differently.
+  const tone = conflict ? "amber" : "rose";
+  const Icon = conflict ? RefreshCw : AlertCircle;
+
   return (
     <div
       role="alert"
-      className="flex items-start gap-2 rounded-lg bg-[hsl(var(--tone-rose-bg))] px-3 py-2.5 text-[13px] text-[hsl(var(--tone-rose))]"
+      className={`flex items-start gap-2 rounded-lg bg-[hsl(var(--tone-${tone}-bg))] px-3 py-2.5 text-[13px] text-[hsl(var(--tone-${tone}))]`}
     >
-      <AlertCircle className="mt-0.5 size-4 shrink-0" />
-      <span>{message}</span>
+      <Icon className="mt-0.5 size-4 shrink-0" />
+      <span>
+        {message}
+        {conflict ? (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="ml-2 underline underline-offset-2"
+          >
+            Reload now
+          </button>
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -105,7 +124,10 @@ export function FormModal({
       }
     >
       <form id="form-modal" action={formAction} className="space-y-4">
-        <FormError message={state.errors ? state.message : undefined} />
+        <FormError
+          message={state.errors || state.conflict ? state.message : undefined}
+          conflict={state.conflict}
+        />
         {children({ errors, pending })}
       </form>
     </Modal>

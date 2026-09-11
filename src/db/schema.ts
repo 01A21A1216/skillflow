@@ -1,84 +1,95 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   index,
   integer,
+  jsonb,
+  pgTable,
   real,
-  sqliteTable,
   text,
+  timestamp,
   uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 
 /* ------------------------------------------------------------------ *
  * Shared column helpers
+ *
+ * Four concerns appear on nearly every business table and are declared
+ * once here so they cannot drift:
+ *
+ *   createdAt / updatedAt   when the row changed
+ *   createdBy / updatedBy   who changed it            (§20)
+ *   deletedAt / deletedBy   soft delete + recovery    (§20)
+ *   rowVersion              optimistic concurrency    (§20)
+ *
+ * `rowVersion` starts at 1 and every update must supply the version it
+ * read. The action layer compares and swaps, so two recruiters editing the
+ * same record cannot silently overwrite each other.
  * ------------------------------------------------------------------ */
 
 const pk = () => text("id").primaryKey();
-const createdAt = () =>
-  integer("created_at", { mode: "timestamp_ms" })
-    .notNull()
-    .default(sql`(unixepoch() * 1000)`);
-const updatedAt = () =>
-  integer("updated_at", { mode: "timestamp_ms" })
-    .notNull()
-    .default(sql`(unixepoch() * 1000)`);
+const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
+const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
+
+/** Audit + soft delete + concurrency, for tables that users edit directly. */
+const stewardship = () => ({
+  createdBy: text("created_by"),
+  updatedBy: text("updated_by"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedBy: text("deleted_by"),
+  rowVersion: integer("row_version").notNull().default(1),
+});
 
 /* ------------------------------------------------------------------ *
  * People: recruiters, hiring managers, coordinators, interviewers
  * ------------------------------------------------------------------ */
 
-export const users = sqliteTable(
+export const users = pgTable(
   "users",
   {
     id: pk(),
     name: text("name").notNull(),
     email: text("email").notNull(),
-    role: text("role").notNull(), // admin | recruiter | hiring_manager | coordinator | interviewer
+    role: text("role").notNull(),
     title: text("title").notNull(),
     department: text("department").notNull(),
     phone: text("phone"),
     timezone: text("timezone").notNull().default("America/New_York"),
     accent: text("accent").notNull().default("indigo"),
-    capacity: integer("capacity").notNull().default(12), // target concurrent reqs
-    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    capacity: integer("capacity").notNull().default(12),
+    active: boolean("active").notNull().default(true),
     joinedAt: text("joined_at").notNull(),
     /** scrypt digest, stored as `scrypt$N$r$p$salt$hash`. Null = cannot sign in. */
     passwordHash: text("password_hash"),
-    lastLoginAt: integer("last_login_at", { mode: "timestamp_ms" }),
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
     createdAt: createdAt(),
+    ...stewardship(),
   },
-  (t) => [uniqueIndex("users_email_idx").on(t.email)],
+  (t) => [uniqueIndex("users_email_idx").on(t.email), index("users_deleted_idx").on(t.deletedAt)],
 );
 
 /* ------------------------------------------------------------------ *
  * Identity and access control
- *
- * Roles and permissions are rows, not constants, because the spec
- * requires the permission matrix to be configurable by an administrator.
- * `users.role` references `roles.key` so existing role strings keep
- * working and no wide migration of the users table is needed.
  * ------------------------------------------------------------------ */
 
-export const roles = sqliteTable("roles", {
+export const roles = pgTable("roles", {
   key: text("key").primaryKey(),
   label: text("label").notNull(),
   description: text("description").notNull().default(""),
-  /** Lower ranks are more privileged; used for "can this actor manage that one". */
   rank: integer("rank").notNull().default(100),
-  /** System roles cannot be deleted, only have their permissions edited. */
-  isSystem: integer("is_system", { mode: "boolean" }).notNull().default(true),
+  isSystem: boolean("is_system").notNull().default(true),
   createdAt: createdAt(),
 });
 
-export const permissions = sqliteTable("permissions", {
+export const permissions = pgTable("permissions", {
   key: text("key").primaryKey(),
   label: text("label").notNull(),
   category: text("category").notNull(),
   description: text("description").notNull().default(""),
-  /** Marks permissions that expose candidate PII, for review and reporting. */
-  sensitive: integer("sensitive", { mode: "boolean" }).notNull().default(false),
+  sensitive: boolean("sensitive").notNull().default(false),
 });
 
-export const rolePermissions = sqliteTable(
+export const rolePermissions = pgTable(
   "role_permissions",
   {
     id: pk(),
@@ -95,12 +106,7 @@ export const rolePermissions = sqliteTable(
   ],
 );
 
-/**
- * Sessions store only a SHA-256 hash of the token. The raw token lives in
- * the user's cookie and nowhere else, so a database leak does not hand
- * anyone a working session.
- */
-export const sessions = sqliteTable(
+export const sessions = pgTable(
   "sessions",
   {
     id: pk(),
@@ -110,9 +116,9 @@ export const sessions = sqliteTable(
     tokenHash: text("token_hash").notNull(),
     userAgent: text("user_agent"),
     createdAt: createdAt(),
-    lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
-    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
   },
   (t) => [
     uniqueIndex("session_token_idx").on(t.tokenHash),
@@ -120,33 +126,35 @@ export const sessions = sqliteTable(
   ],
 );
 
-export type Role = typeof roles.$inferSelect;
-export type Permission = typeof permissions.$inferSelect;
-export type Session = typeof sessions.$inferSelect;
-
 /* ------------------------------------------------------------------ *
  * Client accounts / business units that raise requirements
  * ------------------------------------------------------------------ */
 
-export const clients = sqliteTable("clients", {
-  id: pk(),
-  name: text("name").notNull(),
-  industry: text("industry").notNull(),
-  location: text("location").notNull(),
-  tier: text("tier").notNull().default("standard"), // strategic | key | standard
-  accountOwnerId: text("account_owner_id").references(() => users.id),
-  contactName: text("contact_name"),
-  contactEmail: text("contact_email"),
-  status: text("status").notNull().default("active"), // active | prospect | dormant
-  slaDays: integer("sla_days").notNull().default(21),
-  createdAt: createdAt(),
-});
+export const clients = pgTable(
+  "clients",
+  {
+    id: pk(),
+    name: text("name").notNull(),
+    industry: text("industry").notNull(),
+    location: text("location").notNull(),
+    tier: text("tier").notNull().default("standard"),
+    accountOwnerId: text("account_owner_id").references(() => users.id),
+    contactName: text("contact_name"),
+    contactEmail: text("contact_email"),
+    status: text("status").notNull().default("active"),
+    slaDays: integer("sla_days").notNull().default(21),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    ...stewardship(),
+  },
+  (t) => [index("client_deleted_idx").on(t.deletedAt)],
+);
 
 /* ------------------------------------------------------------------ *
  * Requisitions (open job requirements)
  * ------------------------------------------------------------------ */
 
-export const requisitions = sqliteTable(
+export const requisitions = pgTable(
   "requisitions",
   {
     id: pk(),
@@ -162,13 +170,13 @@ export const requisitions = sqliteTable(
       .notNull()
       .references(() => users.id),
     department: text("department").notNull(),
-    employmentType: text("employment_type").notNull(), // full_time | contract | contract_to_hire | part_time | intern
-    workMode: text("work_mode").notNull(), // onsite | hybrid | remote
+    employmentType: text("employment_type").notNull(),
+    workMode: text("work_mode").notNull(),
     location: text("location").notNull(),
     openings: integer("openings").notNull().default(1),
     filled: integer("filled").notNull().default(0),
-    priority: text("priority").notNull().default("medium"), // critical | high | medium | low
-    status: text("status").notNull().default("open"), // draft | open | on_hold | filled | cancelled | closed
+    priority: text("priority").notNull().default("medium"),
+    status: text("status").notNull().default("open"),
     seniority: text("seniority").notNull().default("mid"),
     minSalary: integer("min_salary"),
     maxSalary: integer("max_salary"),
@@ -177,27 +185,26 @@ export const requisitions = sqliteTable(
     currency: text("currency").notNull().default("USD"),
     experienceMin: integer("experience_min").notNull().default(0),
     experienceMax: integer("experience_max").notNull().default(10),
-    skills: text("skills", { mode: "json" }).$type<string[]>().notNull().default([]),
+    skills: jsonb("skills").$type<string[]>().notNull().default([]),
     description: text("description").notNull().default(""),
-    requirements: text("requirements", { mode: "json" })
-      .$type<string[]>()
-      .notNull()
-      .default([]),
+    requirements: jsonb("requirements").$type<string[]>().notNull().default([]),
     openedAt: text("opened_at").notNull(),
     targetFillDate: text("target_fill_date"),
     closedAt: text("closed_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    ...stewardship(),
   },
   (t) => [
     uniqueIndex("req_code_idx").on(t.code),
     index("req_status_idx").on(t.status),
     index("req_client_idx").on(t.clientId),
     index("req_recruiter_idx").on(t.leadRecruiterId),
+    index("req_deleted_idx").on(t.deletedAt),
   ],
 );
 
-export const requisitionAssignees = sqliteTable(
+export const requisitionAssignees = pgTable(
   "requisition_assignees",
   {
     id: pk(),
@@ -216,7 +223,7 @@ export const requisitionAssignees = sqliteTable(
  * Candidates
  * ------------------------------------------------------------------ */
 
-export const candidates = sqliteTable(
+export const candidates = pgTable(
   "candidates",
   {
     id: pk(),
@@ -229,34 +236,34 @@ export const candidates = sqliteTable(
     currentCompany: text("current_company").notNull(),
     yearsExperience: real("years_experience").notNull().default(0),
     seniority: text("seniority").notNull().default("mid"),
-    skills: text("skills", { mode: "json" }).$type<string[]>().notNull().default([]),
-    source: text("source").notNull(), // referral | job_board | linkedin | career_site | agency | event | inbound | sourced | rehire
+    skills: jsonb("skills").$type<string[]>().notNull().default([]),
+    source: text("source").notNull(),
     sourceDetail: text("source_detail"),
     referredById: text("referred_by_id").references(() => users.id),
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id),
-    status: text("status").notNull().default("active"), // new | active | passive | placed | do_not_contact | archived
+    status: text("status").notNull().default("active"),
     expectedSalary: integer("expected_salary"),
     currentSalary: integer("current_salary"),
     currency: text("currency").notNull().default("USD"),
     noticePeriodDays: integer("notice_period_days").notNull().default(14),
     workAuthorization: text("work_authorization").notNull().default("citizen"),
-    willingToRelocate: integer("willing_to_relocate", { mode: "boolean" })
-      .notNull()
-      .default(false),
+    willingToRelocate: boolean("willing_to_relocate").notNull().default(false),
     linkedinUrl: text("linkedin_url"),
     summary: text("summary").notNull().default(""),
-    tags: text("tags", { mode: "json" }).$type<string[]>().notNull().default([]),
+    tags: jsonb("tags").$type<string[]>().notNull().default([]),
     rating: integer("rating").notNull().default(0),
-    lastContactedAt: integer("last_contacted_at", { mode: "timestamp_ms" }),
+    lastContactedAt: timestamp("last_contacted_at", { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    ...stewardship(),
   },
   (t) => [
     uniqueIndex("cand_email_idx").on(t.email),
     index("cand_owner_idx").on(t.ownerId),
     index("cand_status_idx").on(t.status),
+    index("cand_deleted_idx").on(t.deletedAt),
   ],
 );
 
@@ -264,7 +271,7 @@ export const candidates = sqliteTable(
  * Submissions: a candidate moving through one requisition pipeline
  * ------------------------------------------------------------------ */
 
-export const submissions = sqliteTable(
+export const submissions = pgTable(
   "submissions",
   {
     id: pk(),
@@ -275,29 +282,30 @@ export const submissions = sqliteTable(
       .notNull()
       .references(() => requisitions.id, { onDelete: "cascade" }),
     stage: text("stage").notNull().default("sourced"),
-    // sourced | screening | submitted | interview | offer | hired | rejected | withdrawn
-    status: text("status").notNull().default("active"), // active | hired | rejected | withdrawn | on_hold
+    status: text("status").notNull().default("active"),
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id),
     matchScore: integer("match_score").notNull().default(0),
     expectedRate: integer("expected_rate"),
     rejectionReason: text("rejection_reason"),
-    rejectedAt: integer("rejected_at", { mode: "timestamp_ms" }),
-    submittedAt: integer("submitted_at", { mode: "timestamp_ms" }),
-    stageSince: integer("stage_since", { mode: "timestamp_ms" }).notNull(),
+    rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    stageSince: timestamp("stage_since", { withTimezone: true }).notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    ...stewardship(),
   },
   (t) => [
     uniqueIndex("sub_unique_idx").on(t.candidateId, t.requisitionId),
     index("sub_req_idx").on(t.requisitionId),
     index("sub_stage_idx").on(t.stage),
     index("sub_status_idx").on(t.status),
+    index("sub_deleted_idx").on(t.deletedAt),
   ],
 );
 
-export const stageEvents = sqliteTable(
+export const stageEvents = pgTable(
   "stage_events",
   {
     id: pk(),
@@ -317,7 +325,7 @@ export const stageEvents = sqliteTable(
  * Interviews, panel, feedback
  * ------------------------------------------------------------------ */
 
-export const interviews = sqliteTable(
+export const interviews = pgTable(
   "interviews",
   {
     id: pk(),
@@ -326,28 +334,30 @@ export const interviews = sqliteTable(
       .references(() => submissions.id, { onDelete: "cascade" }),
     round: integer("round").notNull().default(1),
     title: text("title").notNull(),
-    type: text("type").notNull(), // phone_screen | technical | system_design | behavioral | panel | hiring_manager | client | final
-    mode: text("mode").notNull().default("video"), // video | phone | onsite
-    scheduledAt: integer("scheduled_at", { mode: "timestamp_ms" }).notNull(),
+    type: text("type").notNull(),
+    mode: text("mode").notNull().default("video"),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
     durationMinutes: integer("duration_minutes").notNull().default(60),
     locationOrLink: text("location_or_link"),
-    status: text("status").notNull().default("scheduled"), // scheduled | completed | cancelled | no_show | rescheduled
-    outcome: text("outcome").notNull().default("pending"), // strong_yes | yes | lean_yes | lean_no | no | strong_no | pending
+    status: text("status").notNull().default("scheduled"),
+    outcome: text("outcome").notNull().default("pending"),
     organizerId: text("organizer_id")
       .notNull()
       .references(() => users.id),
     agenda: text("agenda"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    ...stewardship(),
   },
   (t) => [
     index("iv_sub_idx").on(t.submissionId),
     index("iv_time_idx").on(t.scheduledAt),
     index("iv_status_idx").on(t.status),
+    index("iv_deleted_idx").on(t.deletedAt),
   ],
 );
 
-export const interviewPanel = sqliteTable(
+export const interviewPanel = pgTable(
   "interview_panel",
   {
     id: pk(),
@@ -357,12 +367,12 @@ export const interviewPanel = sqliteTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id),
-    role: text("role").notNull().default("interviewer"), // interviewer | shadow | observer
+    role: text("role").notNull().default("interviewer"),
   },
   (t) => [uniqueIndex("panel_unique_idx").on(t.interviewId, t.userId)],
 );
 
-export const feedback = sqliteTable(
+export const feedback = pgTable(
   "feedback",
   {
     id: pk(),
@@ -372,7 +382,7 @@ export const feedback = sqliteTable(
     interviewerId: text("interviewer_id")
       .notNull()
       .references(() => users.id),
-    recommendation: text("recommendation").notNull(), // strong_hire | hire | lean_hire | lean_no_hire | no_hire
+    recommendation: text("recommendation").notNull(),
     overall: integer("overall").notNull(),
     technical: integer("technical").notNull(),
     communication: integer("communication").notNull(),
@@ -381,7 +391,7 @@ export const feedback = sqliteTable(
     strengths: text("strengths").notNull().default(""),
     concerns: text("concerns").notNull().default(""),
     notes: text("notes").notNull().default(""),
-    submittedAt: integer("submitted_at", { mode: "timestamp_ms" }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("feedback_unique_idx").on(t.interviewId, t.interviewerId)],
@@ -391,7 +401,7 @@ export const feedback = sqliteTable(
  * Offers
  * ------------------------------------------------------------------ */
 
-export const offers = sqliteTable(
+export const offers = pgTable(
   "offers",
   {
     id: pk(),
@@ -399,7 +409,6 @@ export const offers = sqliteTable(
       .notNull()
       .references(() => submissions.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("draft"),
-    // draft | pending_approval | approved | extended | accepted | declined | rescinded | expired
     baseSalary: integer("base_salary").notNull(),
     bonusPercent: real("bonus_percent").notNull().default(0),
     signingBonus: integer("signing_bonus").notNull().default(0),
@@ -407,21 +416,24 @@ export const offers = sqliteTable(
     currency: text("currency").notNull().default("USD"),
     startDate: text("start_date"),
     expiresAt: text("expires_at"),
-    extendedAt: integer("extended_at", { mode: "timestamp_ms" }),
-    respondedAt: integer("responded_at", { mode: "timestamp_ms" }),
+    extendedAt: timestamp("extended_at", { withTimezone: true }),
+    respondedAt: timestamp("responded_at", { withTimezone: true }),
     approvedById: text("approved_by_id").references(() => users.id),
     createdById: text("created_by_id")
       .notNull()
       .references(() => users.id),
     declineReason: text("decline_reason"),
+    /** Offer revision number, distinct from `rowVersion` (concurrency). */
     version: integer("version").notNull().default(1),
     notes: text("notes").notNull().default(""),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    ...stewardship(),
   },
   (t) => [
     index("offer_sub_idx").on(t.submissionId),
     index("offer_status_idx").on(t.status),
+    index("offer_deleted_idx").on(t.deletedAt),
   ],
 );
 
@@ -429,23 +441,35 @@ export const offers = sqliteTable(
  * Notes + activity timeline
  * ------------------------------------------------------------------ */
 
-export const notes = sqliteTable(
+export const notes = pgTable(
   "notes",
   {
     id: pk(),
-    entityType: text("entity_type").notNull(), // candidate | requisition | submission
+    entityType: text("entity_type").notNull(),
     entityId: text("entity_id").notNull(),
     authorId: text("author_id")
       .notNull()
       .references(() => users.id),
     body: text("body").notNull(),
-    pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+    pinned: boolean("pinned").notNull().default(false),
     createdAt: createdAt(),
+    ...stewardship(),
   },
-  (t) => [index("note_entity_idx").on(t.entityType, t.entityId)],
+  (t) => [
+    index("note_entity_idx").on(t.entityType, t.entityId),
+    index("note_deleted_idx").on(t.deletedAt),
+  ],
 );
 
-export const activities = sqliteTable(
+/**
+ * The audit trail.
+ *
+ * `summary` is the human sentence for the activity feed. `changes` is the
+ * structured diff the specification asks for (§13): one entry per field, with
+ * the value before and after, so the record can answer "who changed the
+ * priority, from what, to what, and when" without parsing prose.
+ */
+export const activities = pgTable(
   "activities",
   {
     id: pk(),
@@ -454,14 +478,25 @@ export const activities = sqliteTable(
     type: text("type").notNull(),
     actorId: text("actor_id").references(() => users.id),
     summary: text("summary").notNull(),
-    meta: text("meta", { mode: "json" }).$type<Record<string, unknown>>(),
+    changes: jsonb("changes").$type<FieldChange[]>(),
+    meta: jsonb("meta").$type<Record<string, unknown>>(),
     createdAt: createdAt(),
   },
   (t) => [
     index("activity_entity_idx").on(t.entityType, t.entityId),
     index("activity_time_idx").on(t.createdAt),
+    index("activity_actor_idx").on(t.actorId),
+    index("activity_type_idx").on(t.type),
   ],
 );
+
+/** One field-level before/after pair on an audit entry. */
+export interface FieldChange {
+  field: string;
+  label: string;
+  from: string | number | boolean | null;
+  to: string | number | boolean | null;
+}
 
 export type User = typeof users.$inferSelect;
 export type Client = typeof clients.$inferSelect;
@@ -474,3 +509,20 @@ export type Offer = typeof offers.$inferSelect;
 export type Note = typeof notes.$inferSelect;
 export type Activity = typeof activities.$inferSelect;
 export type StageEvent = typeof stageEvents.$inferSelect;
+export type Role = typeof roles.$inferSelect;
+export type Permission = typeof permissions.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
+
+/** Tables that carry the stewardship columns, for generic helpers. */
+export const SOFT_DELETE_TABLES = [
+  "users",
+  "clients",
+  "requisitions",
+  "candidates",
+  "submissions",
+  "interviews",
+  "offers",
+  "notes",
+] as const;
+
+export { sql };

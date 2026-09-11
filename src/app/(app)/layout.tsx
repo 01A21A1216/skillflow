@@ -18,10 +18,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const granted = permissionSet(actor);
 
   const counts = {
-    requisitions: openRequisitionCount(actor),
-    pipeline: activePipelineCount(actor),
-    interviews: listInterviews({ window: "week" }, actor).length,
-    offers: openOfferCount(actor),
+    requisitions: await openRequisitionCount(actor),
+    pipeline: await activePipelineCount(actor),
+    interviews: (await listInterviews({ window: "week" }, actor)).length,
+    offers: await openOfferCount(actor),
   };
 
   return (

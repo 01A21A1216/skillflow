@@ -4,9 +4,10 @@ import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 
 import { db } from "@/db";
-import { activities, type User } from "@/db/schema";
+import { activities, type FieldChange, type User } from "@/db/schema";
 import type { PermissionKey } from "@/lib/permissions";
-import { ForbiddenError } from "@/server/authz";
+import { ForbiddenError, loadPermissionMatrix } from "@/server/authz";
+import { ConcurrencyError, concurrencyMessage } from "@/server/integrity";
 import { actorWithPermission } from "@/server/session";
 
 export interface ActionState {
@@ -16,6 +17,8 @@ export interface ActionState {
   errors?: Record<string, string>;
   /** Id of the record that was created or touched, for optimistic navigation. */
   id?: string;
+  /** Set when the write lost a race against another editor. */
+  conflict?: boolean;
 }
 
 export const IDLE: ActionState = { ok: false };
@@ -79,19 +82,28 @@ export function guarded(
   handler: (actor: User, formData: FormData) => Promise<ActionState>,
 ) {
   return async (_prev: ActionState, formData: FormData): Promise<ActionState> => {
+    await loadPermissionMatrix();
+
     let actor: User;
     try {
       actor = await actorWithPermission(permission);
     } catch (error) {
       if (error instanceof ForbiddenError) {
-        return {
-          ok: false,
-          message: "You do not have permission to do that.",
-        };
+        return { ok: false, message: "You do not have permission to do that." };
       }
       throw error;
     }
-    return handler(actor, formData);
+
+    try {
+      return await handler(actor, formData);
+    } catch (error) {
+      // A lost write race is an expected outcome with several people on one
+      // desk, not a crash: report it so the user can reload and reapply.
+      if (error instanceof ConcurrencyError) {
+        return { ok: false, message: concurrencyMessage(error), conflict: true };
+      }
+      throw error;
+    }
   };
 }
 
@@ -104,26 +116,27 @@ export function succeed(message: string, id?: string): ActionState {
   return { ok: true, message, id };
 }
 
-export function logActivity(entry: {
+export async function logActivity(entry: {
   entityType: string;
   entityId: string;
   type: string;
   actorId: string | null;
   summary: string;
+  /** Field-level before/after, so the trail answers "from what, to what" (§13). */
+  changes?: FieldChange[];
   meta?: Record<string, unknown>;
 }) {
-  db.insert(activities)
-    .values({
-      id: newId("act"),
-      entityType: entry.entityType,
-      entityId: entry.entityId,
-      type: entry.type,
-      actorId: entry.actorId,
-      summary: entry.summary,
-      meta: entry.meta ?? null,
-      createdAt: new Date(),
-    })
-    .run();
+  await db.insert(activities).values({
+    id: newId("act"),
+    entityType: entry.entityType,
+    entityId: entry.entityId,
+    type: entry.type,
+    actorId: entry.actorId,
+    summary: entry.summary,
+    changes: entry.changes?.length ? entry.changes : null,
+    meta: entry.meta ?? null,
+    createdAt: new Date(),
+  });
 }
 
 /** ISO date string (yyyy-mm-dd) for `n` days from now. */

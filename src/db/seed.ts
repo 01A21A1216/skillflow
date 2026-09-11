@@ -15,11 +15,10 @@
  */
 
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 
 import * as s from "./schema";
 import { PERMISSIONS, ROLES } from "../lib/permissions";
@@ -1070,83 +1069,93 @@ for (const plan of reqPlans) {
  * 6. Write everything
  * ------------------------------------------------------------------ */
 
-const DB_PATH = process.env.DATABASE_PATH ?? path.join(process.cwd(), "data", "rcc.db");
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+const CONNECTION =
+  process.env.DATABASE_URL ?? "postgres://rcc:rcc_local_dev@localhost:5433/rcc";
 
-const sqlite = new Database(DB_PATH);
-sqlite.pragma("journal_mode = WAL");
+const pool = new Pool({ connectionString: CONNECTION, max: 4 });
+const db = drizzle(pool, { schema: s });
 
 /**
- * Drop every table in place rather than deleting the file. On Windows a running
- * dev server holds an open handle, so `rm` fails with EPERM; this way
- * `npm run db:seed` works while the app is up.
+ * Drop and recreate rather than deleting a file: the database now lives in
+ * Postgres, and `drop schema public cascade` is the equivalent clean slate.
+ * Safe because this script is only ever pointed at a development database.
  */
-sqlite.pragma("foreign_keys = OFF");
-for (const { name } of sqlite
-  .prepare("select name from sqlite_master where type = 'table' and name not like 'sqlite_%'")
-  .all() as { name: string }[]) {
-  sqlite.exec(`drop table if exists "${name}"`);
+async function reset() {
+  await pool.query("drop schema if exists public cascade");
+  await pool.query("create schema public");
+  // Drizzle records applied migrations in its own schema. Dropping only
+  // `public` would leave that ledger behind, the migrator would believe the
+  // work was already done, and the tables would never be recreated.
+  await pool.query("drop schema if exists drizzle cascade");
+  await migrate(db, { migrationsFolder: path.join(process.cwd(), "drizzle") });
 }
-sqlite.pragma("foreign_keys = ON");
 
-const db = drizzle(sqlite, { schema: s });
-migrate(db, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-
-function insertAll(table: never, rows: unknown[], label: string) {
-  const CHUNK = 400;
+async function insertAll(table: never, rows: unknown[], label: string) {
+  const CHUNK = 500;
   for (let i = 0; i < rows.length; i += CHUNK) {
-    db.insert(table)
-      .values(rows.slice(i, i + CHUNK) as never)
-      .run();
+    await db
+      .insert(table)
+      .values(rows.slice(i, i + CHUNK) as never);
   }
   console.log(`  ${label.padEnd(20)} ${String(rows.length).padStart(5)}`);
 }
 
-console.log("\nSeeding Recruitment Command Center\n");
+async function main() {
+  console.log("");
+  console.log("Seeding Recruitment Command Center");
+  console.log(`  target ${CONNECTION.replace(/:[^:@]*@/, ":****@")}`);
+  console.log("");
 
-const roleRows = ROLES.map((r) => ({
-  key: r.key,
-  label: r.label,
-  description: r.description,
-  rank: r.rank,
-  isSystem: true,
-  createdAt: new Date(NOW),
-}));
-const permissionRows = PERMISSIONS.map((p) => ({
-  key: p.key,
-  label: p.label,
-  category: p.category,
-  description: p.description,
-  sensitive: Boolean((p as { sensitive?: boolean }).sensitive),
-}));
-const rolePermissionRows = ROLES.flatMap((r) =>
-  r.permissions.map((perm) => ({
-    id: id("rpm"),
-    roleKey: r.key,
-    permissionKey: perm,
-  })),
-);
+  await reset();
 
-sqlite.transaction(() => {
-  insertAll(s.roles as never, roleRows, "roles");
-  insertAll(s.permissions as never, permissionRows, "permissions");
-  insertAll(s.rolePermissions as never, rolePermissionRows, "role permissions");
-  insertAll(s.users as never, users, "users");
-  insertAll(s.clients as never, clients, "clients");
-  insertAll(s.requisitions as never, requisitions, "requisitions");
-  insertAll(s.requisitionAssignees as never, reqAssignees, "req assignees");
-  insertAll(s.candidates as never, candidates, "candidates");
-  insertAll(s.submissions as never, submissions, "submissions");
-  insertAll(s.stageEvents as never, stageEvents, "stage events");
-  insertAll(s.interviews as never, interviews, "interviews");
-  insertAll(s.interviewPanel as never, panels, "panel members");
-  insertAll(s.feedback as never, feedbacks, "feedback");
-  insertAll(s.offers as never, offers, "offers");
-  insertAll(s.notes as never, notes, "notes");
-  insertAll(s.activities as never, activities, "activities");
-})();
+  const roleRows = ROLES.map((r) => ({
+    key: r.key,
+    label: r.label,
+    description: r.description,
+    rank: r.rank,
+    isSystem: true,
+    createdAt: new Date(NOW),
+  }));
+  const permissionRows = PERMISSIONS.map((p) => ({
+    key: p.key,
+    label: p.label,
+    category: p.category,
+    description: p.description,
+    sensitive: Boolean((p as { sensitive?: boolean }).sensitive),
+  }));
+  const rolePermissionRows = ROLES.flatMap((r) =>
+    r.permissions.map((perm) => ({
+      id: id("rpm"),
+      roleKey: r.key,
+      permissionKey: perm,
+    })),
+  );
 
-sqlite.pragma("wal_checkpoint(TRUNCATE)");
-sqlite.close();
+  // Postgres enforces foreign keys immediately, so parents go in first.
+  await insertAll(s.roles as never, roleRows, "roles");
+  await insertAll(s.permissions as never, permissionRows, "permissions");
+  await insertAll(s.rolePermissions as never, rolePermissionRows, "role permissions");
+  await insertAll(s.users as never, users, "users");
+  await insertAll(s.clients as never, clients, "clients");
+  await insertAll(s.requisitions as never, requisitions, "requisitions");
+  await insertAll(s.requisitionAssignees as never, reqAssignees, "req assignees");
+  await insertAll(s.candidates as never, candidates, "candidates");
+  await insertAll(s.submissions as never, submissions, "submissions");
+  await insertAll(s.stageEvents as never, stageEvents, "stage events");
+  await insertAll(s.interviews as never, interviews, "interviews");
+  await insertAll(s.interviewPanel as never, panels, "panel members");
+  await insertAll(s.feedback as never, feedbacks, "feedback");
+  await insertAll(s.offers as never, offers, "offers");
+  await insertAll(s.notes as never, notes, "notes");
+  await insertAll(s.activities as never, activities, "activities");
 
-console.log(`\nDatabase written to ${DB_PATH}\n`);
+  await pool.end();
+  console.log("");
+  console.log("Done.");
+}
+
+main().catch(async (error) => {
+  console.error(error);
+  await pool.end();
+  process.exit(1);
+});

@@ -9,6 +9,7 @@ import type { User } from "@/db/schema";
 import { REQ_STATUS, type ReqStatus } from "@/lib/domain";
 import { requisitionSchema, requisitionStatusSchema } from "@/lib/validation";
 import { canTouchRequisition } from "@/server/authz";
+import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
 import {
   denied,
   fail,
@@ -20,15 +21,15 @@ import {
   type ActionState,
 } from "./shared";
 
-function nextReqCode() {
+async function nextReqCode() {
   const year = new Date().getFullYear();
   const prefix = `REQ-${year}-`;
-  const highest = db
+  const highest = (await db
     .select({ code: requisitions.code })
     .from(requisitions)
     .where(sql`${requisitions.code} like ${`${prefix}%`}`)
     .orderBy(sql`${requisitions.code} desc`)
-    .get();
+    )[0];
 
   const n = highest ? Number(highest.code.slice(prefix.length)) + 1 : 1;
   return `${prefix}${String(Number.isFinite(n) ? n : 1).padStart(3, "0")}`;
@@ -40,14 +41,14 @@ async function createRequisitionImpl(actor: User, formData: FormData): Promise<A
   const input = parsed.data;
 
 
-  const client = db.select().from(clients).where(eq(clients.id, input.clientId)).get();
+  const client = (await db.select().from(clients).where(eq(clients.id, input.clientId)))[0];
   if (!client) return fail("That client no longer exists.", { clientId: "Unknown client" });
 
   const id = newId("req");
-  const code = nextReqCode();
+  const code = await nextReqCode();
   const today = new Date().toISOString().slice(0, 10);
 
-  db.insert(requisitions)
+  (await db.insert(requisitions)
     .values({
       id,
       code,
@@ -74,21 +75,20 @@ async function createRequisitionImpl(actor: User, formData: FormData): Promise<A
       requirements: input.requirements,
       openedAt: today,
       targetFillDate: input.targetFillDate ?? null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      ...stampNew(actor.id),
     })
-    .run();
+    );
 
-  db.insert(requisitionAssignees)
+  (await db.insert(requisitionAssignees)
     .values({
       id: newId("ras"),
       requisitionId: id,
       userId: input.leadRecruiterId,
       role: "lead",
     })
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "requisition",
     entityId: id,
     type: "requisition_created",
@@ -109,11 +109,33 @@ async function updateRequisitionImpl(actor: User, formData: FormData): Promise<A
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const existing = db.select().from(requisitions).where(eq(requisitions.id, requisitionId)).get();
+  const existing = (await db.select().from(requisitions).where(eq(requisitions.id, requisitionId)))[0];
   if (!existing) return fail("That requisition no longer exists.");
-  if (!canTouchRequisition(actor, requisitionId)) return denied("that requisition");
+  if (!await canTouchRequisition(actor, requisitionId)) return denied("that requisition");
 
-  db.update(requisitions)
+  // Throws ConcurrencyError if someone else saved since this form was rendered;
+  // `guarded` converts that into a message telling the user to reload.
+  const nextVersion = checkVersion("Requisition", existing.rowVersion, formData.get("rowVersion"));
+
+  const changes = diffFields(existing, input, {
+    title: "Job title",
+    status: "Status",
+    priority: "Priority",
+    openings: "Openings",
+    location: "Location",
+    department: "Department",
+    employmentType: "Employment type",
+    workMode: "Work mode",
+    seniority: "Level",
+    minSalary: "Salary minimum",
+    maxSalary: "Salary maximum",
+    targetFillDate: "Target fill date",
+    leadRecruiterId: "Lead recruiter",
+    hiringManagerId: "Hiring manager",
+    skills: "Must-have skills",
+  });
+
+  (await db.update(requisitions)
     .set({
       title: input.title,
       clientId: input.clientId,
@@ -135,17 +157,20 @@ async function updateRequisitionImpl(actor: User, formData: FormData): Promise<A
       description: input.description ?? "",
       requirements: input.requirements,
       targetFillDate: input.targetFillDate ?? null,
-      updatedAt: new Date(),
+      ...stamp(actor.id, nextVersion),
     })
     .where(eq(requisitions.id, requisitionId))
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "requisition",
     entityId: requisitionId,
     type: "requisition_updated",
     actorId: actor.id,
-    summary: `${existing.code} details updated`,
+    summary: changes.length
+      ? `${existing.code}: ${describeChanges(changes)}`
+      : `${existing.code} saved with no changes`,
+    changes,
   });
 
   revalidatePath(`/requisitions/${requisitionId}`);
@@ -158,29 +183,32 @@ async function changeRequisitionStatusImpl(actor: User, formData: FormData): Pro
   if (!parsed.success) return parsed.state;
   const { requisitionId, status, reason } = parsed.data;
 
-  const existing = db.select().from(requisitions).where(eq(requisitions.id, requisitionId)).get();
+  const existing = (await db.select().from(requisitions).where(eq(requisitions.id, requisitionId)))[0];
   if (!existing) return fail("That requisition no longer exists.");
   if (existing.status === status) return fail(`Already ${REQ_STATUS[status as ReqStatus].label.toLowerCase()}.`);
-  if (!canTouchRequisition(actor, requisitionId)) return denied("that requisition");
+  if (!await canTouchRequisition(actor, requisitionId)) return denied("that requisition");
 
   const closing = ["filled", "closed", "cancelled"].includes(status);
 
-  db.update(requisitions)
+  (await db.update(requisitions)
     .set({
       status,
       closedAt: closing ? new Date().toISOString().slice(0, 10) : null,
-      updatedAt: new Date(),
+      ...stamp(actor.id, existing.rowVersion + 1),
     })
     .where(eq(requisitions.id, requisitionId))
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "requisition",
     entityId: requisitionId,
     type: "requisition_status",
     actorId: actor.id,
     summary: `${existing.code} moved to ${REQ_STATUS[status as ReqStatus].label}${reason ? ` — ${reason}` : ""}`,
-    meta: { from: existing.status, to: status },
+    changes: [
+      { field: "status", label: "Status", from: existing.status, to: status },
+    ],
+    meta: { from: existing.status, to: status, reason: reason ?? null },
   });
 
   revalidatePath(`/requisitions/${requisitionId}`);
@@ -195,25 +223,25 @@ async function assignToRequisitionImpl(actor: User, formData: FormData): Promise
   const role = String(formData.get("role") ?? "support");
   if (!requisitionId || !userId) return fail("Pick someone to add.");
 
-  if (!canTouchRequisition(actor, requisitionId)) return denied("that requisition");
+  if (!await canTouchRequisition(actor, requisitionId)) return denied("that requisition");
 
-  const person = db.select().from(users).where(eq(users.id, userId)).get();
+  const person = (await db.select().from(users).where(eq(users.id, userId)))[0];
   if (!person) return fail("That person no longer exists.");
 
-  const already = db
+  const already = (await db
     .select()
     .from(requisitionAssignees)
     .where(eq(requisitionAssignees.requisitionId, requisitionId))
-    .all()
+    )
     .some((a) => a.userId === userId);
 
   if (already) return fail(`${person.name} is already on this requisition.`);
 
-  db.insert(requisitionAssignees)
+  (await db.insert(requisitionAssignees)
     .values({ id: newId("ras"), requisitionId, userId, role })
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "requisition",
     entityId: requisitionId,
     type: "requisition_updated",

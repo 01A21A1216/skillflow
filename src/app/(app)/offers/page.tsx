@@ -59,14 +59,14 @@ export default async function OffersPage({
   };
 
   const actor = await requirePermission("offer.view");
-  const rows = listOffers(filters, actor);
-  const stats = offerStats(actor);
-  const trend = offerTrend(12);
-  const ready = can(actor, "offer.create") ? offerReadySubmissions().slice(0, 40) : [];
-  const facets = requisitionFacets();
-  const openReqs = listRequisitions({ status: "active" }, actor);
+  const rows = await listOffers(filters, actor);
+  const stats = await offerStats(actor);
+  const trend = await offerTrend(12);
+  const ready = can(actor, "offer.create") ? (await offerReadySubmissions()).slice(0, 40) : [];
+  const facets = await requisitionFacets();
+  const openReqs = await listRequisitions({ status: "active" }, actor);
 
-  const all = listOffers({}, actor);
+  const all = await listOffers({}, actor);
   const counts = Object.fromEntries(
     OFFER_STATUSES.map((s) => [s.value, all.filter((o) => o.status === s.value).length]),
   );

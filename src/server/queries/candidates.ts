@@ -77,17 +77,17 @@ const STAGE_RANK: Record<string, number> = {
   withdrawn: -1,
 };
 
-function submissionSummary() {
-  const rows = db
+async function submissionSummary() {
+  const rows = (await db
     .select({
       candidateId: submissions.candidateId,
       stage: submissions.stage,
       status: submissions.status,
-      count: sql<number>`count(*)`,
+      count: sql<number>`count(*)::int`,
     })
     .from(submissions)
     .groupBy(submissions.candidateId, submissions.stage, submissions.status)
-    .all();
+    );
 
   const map = new Map<string, { active: number; total: number; furthest: string | null }>();
   for (const r of rows) {
@@ -103,7 +103,7 @@ function submissionSummary() {
   return map;
 }
 
-export function listCandidates(filters: CandidateFilters = {}, actor?: User): CandidateRow[] {
+export async function listCandidates(filters: CandidateFilters = {}, actor?: User): Promise<CandidateRow[]> {
   const conditions = [];
 
   if (filters.q) {
@@ -115,7 +115,7 @@ export function listCandidates(filters: CandidateFilters = {}, actor?: User): Ca
         like(sql`lower(${candidates.currentTitle})`, term),
         like(sql`lower(${candidates.currentCompany})`, term),
         like(sql`lower(${candidates.location})`, term),
-        like(sql`lower(${candidates.skills})`, term),
+        like(sql`lower(${candidates.skills}::text)`, term),
       ),
     );
   }
@@ -127,18 +127,18 @@ export function listCandidates(filters: CandidateFilters = {}, actor?: User): Ca
   if (filters.auth && filters.auth !== "all")
     conditions.push(eq(candidates.workAuthorization, filters.auth));
   if (filters.skill && filters.skill !== "all")
-    conditions.push(like(sql`lower(${candidates.skills})`, `%${filters.skill.toLowerCase()}%`));
+    conditions.push(like(sql`lower(${candidates.skills}::text)`, `%${filters.skill.toLowerCase()}%`));
   if (filters.minExp) conditions.push(gte(candidates.yearsExperience, Number(filters.minExp)));
   if (filters.maxExp) conditions.push(lte(candidates.yearsExperience, Number(filters.maxExp)));
 
-  const rows = db
+  const rows = (await db
     .select({ candidate: candidates, ownerName: users.name })
     .from(candidates)
     .innerJoin(users, eq(users.id, candidates.ownerId))
     .where(conditions.length ? and(...conditions) : undefined)
-    .all();
+    );
 
-  const summary = submissionSummary();
+  const summary = await submissionSummary();
 
   let result: CandidateRow[] = rows.map(({ candidate: c, ownerName }) => {
     const sum = summary.get(c.id) ?? { active: 0, total: 0, furthest: null };
@@ -193,14 +193,14 @@ export function listCandidates(filters: CandidateFilters = {}, actor?: User): Ca
   return result;
 }
 
-export function getCandidate(candidateId: string, actor?: User) {
-  const raw = db.select().from(candidates).where(eq(candidates.id, candidateId)).get();
+export async function getCandidate(candidateId: string, actor?: User) {
+  const raw = (await db.select().from(candidates).where(eq(candidates.id, candidateId)))[0];
   if (!raw) return null;
   const candidate = actor ? redactCandidate(actor, raw) : raw;
 
-  const owner = db.select().from(users).where(eq(users.id, candidate.ownerId)).get()!;
+  const owner = (await db.select().from(users).where(eq(users.id, candidate.ownerId)))[0]!;
 
-  const subs = db
+  const subs = (await db
     .select({
       submission: submissions,
       requisition: requisitions,
@@ -213,56 +213,56 @@ export function getCandidate(candidateId: string, actor?: User) {
     .innerJoin(users, eq(users.id, submissions.ownerId))
     .where(eq(submissions.candidateId, candidateId))
     .orderBy(desc(submissions.updatedAt))
-    .all();
+    );
 
   const submissionIds = subs.map((s) => s.submission.id);
 
   const ivs = submissionIds.length
-    ? db
+    ? (await db
         .select({ interview: interviews, requisition: requisitions })
         .from(interviews)
         .innerJoin(submissions, eq(submissions.id, interviews.submissionId))
         .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
         .where(inArray(interviews.submissionId, submissionIds))
         .orderBy(desc(interviews.scheduledAt))
-        .all()
+        )
     : [];
 
   const interviewIds = ivs.map((i) => i.interview.id);
 
   const fbs = interviewIds.length
-    ? db
+    ? (await db
         .select({ feedback, interviewer: users, interview: interviews })
         .from(feedback)
         .innerJoin(users, eq(users.id, feedback.interviewerId))
         .innerJoin(interviews, eq(interviews.id, feedback.interviewId))
         .where(inArray(feedback.interviewId, interviewIds))
         .orderBy(desc(feedback.submittedAt))
-        .all()
+        )
     : [];
 
   const panelists = interviewIds.length
-    ? db
+    ? (await db
         .select({ interviewId: interviewPanel.interviewId, user: users, role: interviewPanel.role })
         .from(interviewPanel)
         .innerJoin(users, eq(users.id, interviewPanel.userId))
         .where(inArray(interviewPanel.interviewId, interviewIds))
-        .all()
+        )
     : [];
 
   const offerRows = submissionIds.length
-    ? db
+    ? (await db
         .select({ offer: offers, requisition: requisitions })
         .from(offers)
         .innerJoin(submissions, eq(submissions.id, offers.submissionId))
         .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
         .where(inArray(offers.submissionId, submissionIds))
         .orderBy(desc(offers.createdAt))
-        .all()
+        )
     : [];
 
   const timeline = submissionIds.length
-    ? db
+    ? (await db
         .select({ event: stageEvents, actor: users, requisition: requisitions })
         .from(stageEvents)
         .innerJoin(submissions, eq(submissions.id, stageEvents.submissionId))
@@ -270,10 +270,10 @@ export function getCandidate(candidateId: string, actor?: User) {
         .leftJoin(users, eq(users.id, stageEvents.actorId))
         .where(inArray(stageEvents.submissionId, submissionIds))
         .orderBy(desc(stageEvents.createdAt))
-        .all()
+        )
     : [];
 
-  const candidateNotes = db
+  const candidateNotes = (await db
     .select({ note: notes, author: users })
     .from(notes)
     .innerJoin(users, eq(users.id, notes.authorId))
@@ -286,7 +286,7 @@ export function getCandidate(candidateId: string, actor?: User) {
       ),
     )
     .orderBy(desc(notes.pinned), desc(notes.createdAt))
-    .all();
+    );
 
   return {
     candidate,
@@ -304,16 +304,16 @@ export function getCandidate(candidateId: string, actor?: User) {
 
 export type CandidateDetail = NonNullable<ReturnType<typeof getCandidate>>;
 
-export function candidateFacets() {
-  const owners = db
+export async function candidateFacets() {
+  const owners = (await db
     .select({ id: users.id, name: users.name })
     .from(users)
     .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
     .orderBy(asc(users.name))
-    .all();
+    );
 
   // Skill facet is derived from the JSON arrays actually present on candidates.
-  const skillRows = db.select({ skills: candidates.skills }).from(candidates).all();
+  const skillRows = (await db.select({ skills: candidates.skills }).from(candidates));
   const tally = new Map<string, number>();
   for (const r of skillRows) {
     for (const s of r.skills ?? []) tally.set(s, (tally.get(s) ?? 0) + 1);
@@ -326,6 +326,6 @@ export function candidateFacets() {
 }
 
 /** Candidates not currently in any live pipeline — the re-engagement list. */
-export function benchCandidates(limit = 8) {
-  return listCandidates({ inPipeline: "no", status: "active", sort: "rating" }).slice(0, limit);
+export async function benchCandidates(limit = 8) {
+  return (await listCandidates({ inPipeline: "no", status: "active", sort: "rating" })).slice(0, limit);
 }

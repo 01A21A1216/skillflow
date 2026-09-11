@@ -1,0 +1,31 @@
+# Local Postgres for the Recruitment Command Center.
+#
+# Deliberately on 5433: port 5432 is commonly already taken by another
+# project's database, and this compose file should never collide with one.
+#
+#   docker compose up -d
+#   npm run db:reset
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rcc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rcc
+      POSTGRES_PASSWORD: rcc_local_dev
+      POSTGRES_DB: rcc
+      # Faster startup for a local dev database; not a production setting.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5433:5432"
+    volumes:
+      - rcc-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rcc -d rcc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  rcc-pgdata:

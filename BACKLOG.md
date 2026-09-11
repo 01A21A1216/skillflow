@@ -24,13 +24,15 @@ Two things the spec calls out are **already correct** and should not be re-litig
 - **§27, the operating loop.** Ownership, current status, last update, stage age and next
   action are surfaced on the board, the requirement page and the dashboard action queue.
 
-**Access control has since been built** (items 0.1–0.3): sign-in, sessions, the seven
-specified roles, a database-backed permission matrix, SQL-level row scoping and
-server-side PII redaction, with 45 tests pinning the matrix.
+**Phase 0 is complete.** Access control (0.1–0.3): sign-in, sessions, the seven specified
+roles, a database-backed permission matrix, SQL-level row scoping and server-side PII
+redaction. Platform and integrity (0.4–0.7): Postgres, structured change history, soft
+delete with recovery, and optimistic concurrency. 64 tests cover the permission matrix and
+the integrity rules.
 
-The remaining gaps concentrate in three places: **data integrity guarantees** (no soft
-delete, no concurrency control, no structured change history), **AI** (nothing), and
-**staffing-specific domain fields** (W2/C2C, visa, rate, client review).
+The remaining gaps concentrate in three places: **AI** (nothing yet), **staffing-specific
+domain fields** (W2/C2C, visa, rate, client review), and **module completion** (resume
+upload and parsing, notifications, the audit viewer, settings, exports).
 
 ---
 
@@ -44,10 +46,10 @@ far cheaper now than after another dozen features land on the tables.
 | 0.1 | **Authentication** | §22, §23 | ✅ | M | Done. scrypt passwords, opaque session tokens with only their hash stored, sliding 12-hour expiry, `HttpOnly` cookie. No SSO/MFA/reset yet. |
 | 0.2 | **RBAC: 7 roles + configurable permissions** | §2 | ✅ | L | Done. Roles, permissions and role_permissions are rows, so the matrix stays configurable. Every mutation is exported as `guarded(permission, impl)` — there is no path to a handler that skips the check. Editing the matrix in-app is item 2.6. |
 | 0.3 | **Row-level scoping** | §2, §23 | ✅ | M | Done as SQL predicates in the query layer, plus server-side PII redaction for roles without `candidate.pii`. Verified: a recruiter sees 14 of 54 requirements, an interviewer 72 of 870 interviews, and read-only management renders zero candidate email addresses. |
-| 0.4 | **Move SQLite → Postgres** | §22 | ❌ | M | SQLite takes one writer at a time. "Multiple recruiters update simultaneously" is the requirement that breaks it. The query layer is plain Drizzle, so this is a dialect + connection change, not a rewrite — but it gets harder with every raw-SQL aggregate added. |
-| 0.5 | **Audit schema with old/new values** | §13, §20 | 🟡 | M | `activities` has `{entityType, entityId, type, actorId, summary, meta, createdAt}` — no structured `field / oldValue / newValue`. §13 requires them. Add columns and emit diffs from the action layer. |
-| 0.6 | **Soft delete + `createdBy` / `updatedBy`** | §20 | ❌ | M | Zero occurrences of `deletedAt` or `updatedBy` in the schema today. Touches every table; do it in one migration. |
-| 0.7 | **Optimistic concurrency** | §20 | ❌ | M | No row-version column anywhere. Add `rowVersion`, compare-and-swap in each action, surface a "someone else changed this" merge prompt. (`offers.version` exists but means *offer revision*, not concurrency.) |
+| 0.4 | **Move SQLite → Postgres** | §22 | ✅ | M | Done — Postgres 16 in Docker on port 5433. This was **more than a dialect swap**: better-sqlite3 is synchronous and every Postgres driver is async, so the query layer, the authz scope helpers and every page had to become async (~190 driver calls). The estimate originally recorded here was wrong. |
+| 0.5 | **Audit schema with old/new values** | §13, §20 | ✅ | M | Done — `activities.changes` is a jsonb array of `{field, label, from, to}`, diffed against the stored row so an unchanged save is recorded as such rather than claiming an edit. |
+| 0.6 | **Soft delete + `createdBy` / `updatedBy`** | §20 | ✅ | M | Done — `createdBy`, `updatedBy`, `deletedAt`, `deletedBy` and `rowVersion` on all eight business tables in one migration. Verified: a soft-deleted candidate leaves reads, keeps its submissions, and restores cleanly. No delete UI yet. |
+| 0.7 | **Optimistic concurrency** | §20 | ✅ | M | Done — `rowVersion` compare-and-swap in the action layer, surfaced as a distinct "someone else saved first" prompt with a reload action. Verified end to end: a stale save is refused and the first editor's value survives. |
 | 0.8 | **Object storage for resumes/attachments** | §22, §23 | ❌ | M | Needs signed, permission-checked URLs — candidate PII must not be served from a guessable path. |
 
 > **Sequencing note.** 0.1–0.3 gate the AI assistant (§15 explicitly requires it to respect
@@ -139,7 +141,7 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 
 | # | Item | Status | Size | Notes |
 |---|---|---|---|---|
-| 5.1 | **Automated tests** | 🟡 | L | Vitest is installed with 45 tests pinning the permission matrix (`npm test`). Still missing, and the highest-value remaining targets, are the action-layer business rules: the offer state machine, the hire cascade (offer accepted → submission → candidate → requisition seat count), and stage backfill. These are exactly the rules that break silently. |
+| 5.1 | **Automated tests** | 🟡 | L | Vitest with 64 tests covering the permission matrix and the integrity rules (`npm test`). Still missing, and the highest-value remaining targets, are the action-layer business rules: the offer state machine, the hire cascade (offer accepted → submission → candidate → requisition seat count), and stage backfill. These are exactly the rules that break silently. |
 | 5.2 | **Query performance** | 🟡 | M | Several reads load a full table then filter in TypeScript: `getOffer()` calls `listOffers()` and `.find()`; `getTeamMember()` computes `teamOverview()` for every user to return one; three pages call `listRequisitions({status:"all"})` to look up a single row; candidate pagination slices in JS after loading all matches. Correct and fast at current volumes, wrong shape at 100k candidates. |
 | 5.3 | **Keyboard-accessible pipeline** | 🟡 | S | The board wires `PointerSensor` only. dnd-kit's `KeyboardSensor` would make dragging keyboard-operable. A keyboard path does exist today (each card's "Move stage…" menu), so this is a gap, not a blocker. |
 | 5.4 | **PII handling: encryption at rest, retention, erasure** | ❌ | M | Recruiting data attracts GDPR/CCPA subject-access and deletion requests. Retention policy and a real erasure path (distinct from soft delete) are a legal requirement, not a nice-to-have. |

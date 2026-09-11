@@ -59,14 +59,14 @@ export interface PipelineCard {
 }
 
 /** Every live card in the funnel, ready to be bucketed by stage. */
-export function pipelineCards(filters: PipelineFilters = {}, actor?: User): PipelineCard[] {
+export async function pipelineCards(filters: PipelineFilters = {}, actor?: User): Promise<PipelineCard[]> {
   const conditions = [
     eq(submissions.status, "active"),
     inArray(submissions.stage, ACTIVE_STAGES as unknown as string[]),
   ];
 
   if (actor) {
-    const scope = submissionScope(actor);
+    const scope = await submissionScope(actor);
     if (scope) conditions.push(scope);
   }
   if (filters.requisition && filters.requisition !== "all")
@@ -90,7 +90,7 @@ export function pipelineCards(filters: PipelineFilters = {}, actor?: User): Pipe
     if (match) conditions.push(match);
   }
 
-  const rows = db
+  const rows = (await db
     .select({
       submission: submissions,
       candidate: candidates,
@@ -104,7 +104,7 @@ export function pipelineCards(filters: PipelineFilters = {}, actor?: User): Pipe
     .innerJoin(clients, eq(clients.id, requisitions.clientId))
     .innerJoin(users, eq(users.id, submissions.ownerId))
     .where(and(...conditions))
-    .all();
+    );
 
   const ids = rows.map((r) => r.submission.id);
 
@@ -112,7 +112,7 @@ export function pipelineCards(filters: PipelineFilters = {}, actor?: User): Pipe
   const nextIv = new Map<string, Date>();
   const ivCount = new Map<string, number>();
   if (ids.length) {
-    for (const iv of db
+    for (const iv of (await db
       .select({
         submissionId: interviews.submissionId,
         scheduledAt: interviews.scheduledAt,
@@ -120,7 +120,7 @@ export function pipelineCards(filters: PipelineFilters = {}, actor?: User): Pipe
       })
       .from(interviews)
       .where(inArray(interviews.submissionId, ids))
-      .all()) {
+      )) {
       ivCount.set(iv.submissionId, (ivCount.get(iv.submissionId) ?? 0) + 1);
       if (iv.status !== "scheduled" || iv.scheduledAt.getTime() < Date.now()) continue;
       const current = nextIv.get(iv.submissionId);
@@ -130,12 +130,12 @@ export function pipelineCards(filters: PipelineFilters = {}, actor?: User): Pipe
 
   const offerStatus = new Map<string, string>();
   if (ids.length) {
-    for (const o of db
+    for (const o of (await db
       .select({ submissionId: offers.submissionId, status: offers.status, createdAt: offers.createdAt })
       .from(offers)
       .where(inArray(offers.submissionId, ids))
       .orderBy(desc(offers.createdAt))
-      .all()) {
+      )) {
       if (!offerStatus.has(o.submissionId)) offerStatus.set(o.submissionId, o.status);
     }
   }
@@ -185,12 +185,12 @@ export function groupByStage(cards: PipelineCard[]) {
   return buckets;
 }
 
-export function getSubmission(submissionId: string, actor?: User) {
+export async function getSubmission(submissionId: string, actor?: User) {
   if (actor) {
-    const visible = visibleRequisitionIds(actor);
+    const visible = await visibleRequisitionIds(actor);
     if (visible !== null && !visible.length) return null;
   }
-  const row = db
+  const row = (await db
     .select({
       submission: submissions,
       candidate: candidates,
@@ -204,63 +204,63 @@ export function getSubmission(submissionId: string, actor?: User) {
     .innerJoin(clients, eq(clients.id, requisitions.clientId))
     .innerJoin(users, eq(users.id, submissions.ownerId))
     .where(eq(submissions.id, submissionId))
-    .get();
+    )[0];
 
   if (!row) return null;
   if (actor) {
-    const visible = visibleRequisitionIds(actor);
+    const visible = await visibleRequisitionIds(actor);
     if (visible !== null && !visible.includes(row.requisition.id)) return null;
   }
 
-  const ivs = db
+  const ivs = (await db
     .select()
     .from(interviews)
     .where(eq(interviews.submissionId, submissionId))
     .orderBy(desc(interviews.scheduledAt))
-    .all();
+    );
 
   const ivIds = ivs.map((i) => i.id);
 
   const panel = ivIds.length
-    ? db
+    ? (await db
         .select({ interviewId: interviewPanel.interviewId, user: users, role: interviewPanel.role })
         .from(interviewPanel)
         .innerJoin(users, eq(users.id, interviewPanel.userId))
         .where(inArray(interviewPanel.interviewId, ivIds))
-        .all()
+        )
     : [];
 
   const fbs = ivIds.length
-    ? db
+    ? (await db
         .select({ feedback, interviewer: users })
         .from(feedback)
         .innerJoin(users, eq(users.id, feedback.interviewerId))
         .where(inArray(feedback.interviewId, ivIds))
-        .all()
+        )
     : [];
 
-  const events = db
+  const events = (await db
     .select({ event: stageEvents, actor: users })
     .from(stageEvents)
     .leftJoin(users, eq(users.id, stageEvents.actorId))
     .where(eq(stageEvents.submissionId, submissionId))
     .orderBy(desc(stageEvents.createdAt))
-    .all();
+    );
 
-  const offerRows = db
+  const offerRows = (await db
     .select()
     .from(offers)
     .where(eq(offers.submissionId, submissionId))
     .orderBy(desc(offers.createdAt))
-    .all();
+    );
 
-  const noteRows = db
+  const noteRows = (await db
     .select({ note: notes, author: users })
     .from(notes)
     .innerJoin(users, eq(users.id, notes.authorId))
     .where(and(eq(notes.entityType, "submission"), eq(notes.entityId, submissionId)))
     .orderBy(desc(notes.createdAt))
-    .all();
+    );
 
   return { ...row, interviews: ivs, panel, feedback: fbs, events, offers: offerRows, notes: noteRows };
 }
@@ -268,19 +268,19 @@ export function getSubmission(submissionId: string, actor?: User) {
 export type SubmissionDetail = NonNullable<ReturnType<typeof getSubmission>>;
 
 /** Requisitions a candidate could still be added to. */
-export function openRequisitionOptions(excludeCandidateId?: string) {
+export async function openRequisitionOptions(excludeCandidateId?: string) {
   const taken = excludeCandidateId
     ? new Set(
-        db
+        (await db
           .select({ requisitionId: submissions.requisitionId })
           .from(submissions)
           .where(eq(submissions.candidateId, excludeCandidateId))
-          .all()
+          )
           .map((r) => r.requisitionId),
       )
     : new Set<string>();
 
-  return db
+  return (await db
     .select({
       id: requisitions.id,
       code: requisitions.code,
@@ -291,6 +291,6 @@ export function openRequisitionOptions(excludeCandidateId?: string) {
     .innerJoin(clients, eq(clients.id, requisitions.clientId))
     .where(inArray(requisitions.status, ["open", "on_hold", "draft"]))
     .orderBy(desc(requisitions.openedAt))
-    .all()
+    )
     .filter((r) => !taken.has(r.id));
 }

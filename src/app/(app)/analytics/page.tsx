@@ -54,19 +54,19 @@ export default async function AnalyticsPage({
   const period = resolvePeriod(get("period"));
   const since = period.key === "all" ? undefined : period.since;
 
-  const steps = funnel(since);
-  const velocity = stageVelocity(since);
-  const tth = timeToHire(since);
-  const trend = monthlyTrend(12);
-  const sources = sourceEffectiveness(since);
-  const recruiters = recruiterPerformance(since);
-  const departments = departmentBreakdown();
-  const clients = clientBreakdown();
-  const rejections = rejectionReasons(since);
-  const ivStats = interviewAnalytics(since);
-  const load = interviewerLoad(since);
-  const aging = pipelineAging();
-  const offers = offerStats();
+  const steps = await funnel(since);
+  const velocity = await stageVelocity(since);
+  const tth = await timeToHire(since);
+  const trend = await monthlyTrend(12);
+  const sources = await sourceEffectiveness(since);
+  const recruiters = await recruiterPerformance(since);
+  const departments = await departmentBreakdown();
+  const clients = await clientBreakdown();
+  const rejections = await rejectionReasons(since);
+  const ivStats = await interviewAnalytics(since);
+  const load = await interviewerLoad(since);
+  const aging = await pipelineAging();
+  const offers = await offerStats();
 
   const submitted = steps.find((s) => s.stage === "submitted")?.count ?? 0;
   const hires = steps.find((s) => s.stage === "hired")?.count ?? 0;

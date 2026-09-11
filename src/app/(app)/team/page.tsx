@@ -22,7 +22,7 @@ const ORDER: UserRole[] = ["admin", "recruiter", "coordinator", "hiring_manager"
 
 export default async function TeamPage() {
   await requirePermission("team.view");
-  const members = teamOverview();
+  const members = await teamOverview();
   const grouped = groupBy(members, (m) => m.role);
 
   const recruiters = members.filter((m) => m.capacity > 0);

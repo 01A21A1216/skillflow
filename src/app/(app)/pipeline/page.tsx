@@ -38,10 +38,10 @@ export default async function PipelinePage({
   };
 
   const actor = await requirePermission("requisition.view.assigned");
-  const cards = pipelineCards(filters, actor);
-  const facets = requisitionFacets();
-  const openReqs = listRequisitions({ status: "active", sort: "pipeline" }, actor);
-  const people = listUsers();
+  const cards = await pipelineCards(filters, actor);
+  const facets = await requisitionFacets();
+  const openReqs = await listRequisitions({ status: "active", sort: "pipeline" }, actor);
+  const people = await listUsers();
 
   const aging = cards.filter((c) => c.isAging).length;
   const stageCounts = new Map<Stage, number>();
@@ -158,7 +158,7 @@ export default async function PipelinePage({
         <p className="text-[12px] text-content-subtle">
           Showing {pluralize(cards.length, "candidate")} across{" "}
           {pluralize(new Set(cards.map((c) => c.requisitionId)).size, "requisition")}.{" "}
-          {interviewerOptions().length} people are available as interviewers.
+          {(await interviewerOptions()).length} people are available as interviewers.
         </p>
       </PageBody>
     </>

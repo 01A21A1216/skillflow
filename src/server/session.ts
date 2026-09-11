@@ -7,7 +7,7 @@ import { redirect } from "next/navigation";
 import type { User } from "@/db/schema";
 import type { PermissionKey } from "@/lib/permissions";
 import { SESSION_COOKIE, resolveSession } from "./auth";
-import { ForbiddenError, assertCan, can } from "./authz";
+import { ForbiddenError, assertCan, can, loadPermissionMatrix } from "./authz";
 
 /**
  * Session access.
@@ -19,12 +19,15 @@ import { ForbiddenError, assertCan, can } from "./authz";
 
 export const currentUser = cache(async (): Promise<User | null> => {
   const store = await cookies();
-  return resolveSession(store.get(SESSION_COOKIE)?.value);
+  return await resolveSession(store.get(SESSION_COOKIE)?.value);
 });
 
 export async function requireUser(): Promise<User> {
   const user = await currentUser();
   if (!user) redirect("/login");
+  // Every authenticated entry point loads the matrix, so `can()` can stay
+  // synchronous without any caller having to remember to prime it.
+  await loadPermissionMatrix();
   return user;
 }
 
@@ -46,6 +49,7 @@ export async function requirePermission(permission: PermissionKey): Promise<User
 export async function actorWithPermission(permission: PermissionKey): Promise<User> {
   const user = await currentUser();
   if (!user) throw new ForbiddenError(permission);
+  await loadPermissionMatrix();
   assertCan(user, permission);
   return user;
 }

@@ -50,14 +50,14 @@ export default async function InterviewsPage({
   };
 
   const actor = await requirePermission("interview.view.own");
-  const rows = listInterviews(filters, actor);
+  const rows = await listInterviews(filters, actor);
   const groups = groupByDay(rows);
   const focusId = get("focus");
 
-  const upcoming = listInterviews({ window: "upcoming" }, actor);
-  const thisWeek = listInterviews({ window: "week" }, actor);
-  const debt = awaitingFeedback(undefined, actor);
-  const openReqs = listRequisitions({ status: "active" }, actor);
+  const upcoming = await listInterviews({ window: "upcoming" }, actor);
+  const thisWeek = await listInterviews({ window: "week" }, actor);
+  const debt = await awaitingFeedback(undefined, actor);
+  const openReqs = await listRequisitions({ status: "active" }, actor);
 
   const hoursThisWeek =
     Math.round((thisWeek.reduce((s, i) => s + i.durationMinutes, 0) / 60) * 10) / 10;
@@ -109,7 +109,7 @@ export default async function InterviewsPage({
           />
           <KpiTile
             label="Interviewers available"
-            value={String(interviewerOptions().length)}
+            value={String((await interviewerOptions()).length)}
             hint="People who can be added to a panel"
             tone="indigo"
             href="/team"
@@ -133,7 +133,7 @@ export default async function InterviewsPage({
               name: "interviewer",
               label: "Interviewer",
               width: "w-auto min-w-[11rem]",
-              options: interviewerOptions().map((i) => ({ value: i.id, label: i.name })),
+              options: (await interviewerOptions()).map((i) => ({ value: i.id, label: i.name })),
             },
             {
               name: "requisition",

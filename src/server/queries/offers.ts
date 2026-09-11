@@ -5,7 +5,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { candidates, clients, offers, requisitions, submissions, users } from "@/db/schema";
 import { daysBetween } from "@/lib/utils";
-import { alias } from "drizzle-orm/sqlite-core";
+import { alias } from "drizzle-orm/pg-core";
 import type { User } from "@/db/schema";
 import { visibleRequisitionIds } from "@/server/authz";
 
@@ -55,12 +55,12 @@ export interface OfferRow {
 
 const OPEN_STATUSES = ["draft", "pending_approval", "approved", "extended"];
 
-export function listOffers(filters: OfferFilters = {}, actor?: User): OfferRow[] {
+export async function listOffers(filters: OfferFilters = {}, actor?: User): Promise<OfferRow[]> {
   const approver = alias(users, "approver");
   const conditions = [];
 
   if (actor) {
-    const visible = visibleRequisitionIds(actor);
+    const visible = await visibleRequisitionIds(actor);
     if (visible !== null) {
       if (!visible.length) return [];
       conditions.push(inArray(requisitions.id, visible));
@@ -76,7 +76,7 @@ export function listOffers(filters: OfferFilters = {}, actor?: User): OfferRow[]
   if (filters.recruiter && filters.recruiter !== "all")
     conditions.push(eq(offers.createdById, filters.recruiter));
 
-  const rows = db
+  const rows = (await db
     .select({
       offer: offers,
       candidate: candidates,
@@ -94,7 +94,7 @@ export function listOffers(filters: OfferFilters = {}, actor?: User): OfferRow[]
     .innerJoin(users, eq(users.id, offers.createdById))
     .leftJoin(approver, eq(approver.id, offers.approvedById))
     .where(conditions.length ? and(...conditions) : undefined)
-    .all();
+    );
 
   const result: OfferRow[] = rows.map(
     ({ offer: o, candidate: c, requisition: r, clientName, createdByName, approvedByName, submissionId }) => {
@@ -153,13 +153,13 @@ export function listOffers(filters: OfferFilters = {}, actor?: User): OfferRow[]
   return result;
 }
 
-export function getOffer(offerId: string) {
-  return listOffers().find((o) => o.id === offerId) ?? null;
+export async function getOffer(offerId: string) {
+  return (await listOffers()).find((o) => o.id === offerId) ?? null;
 }
 
 /** Headline numbers for the offers page. */
-export function offerStats(actor?: User) {
-  const all = listOffers({}, actor);
+export async function offerStats(actor?: User) {
+  const all = await listOffers({}, actor);
   const responded = all.filter((o) => ["accepted", "declined"].includes(o.status));
   const accepted = all.filter((o) => o.status === "accepted");
   const open = all.filter((o) => o.isOpen);
@@ -200,10 +200,10 @@ export function offerStats(actor?: User) {
 }
 
 /** Submissions at offer stage that do not yet have an offer record. */
-export function offerReadySubmissions() {
-  const existing = new Set(db.select({ id: offers.submissionId }).from(offers).all().map((r) => r.id));
+export async function offerReadySubmissions() {
+  const existing = new Set((await db.select({ id: offers.submissionId }).from(offers)).map((r) => r.id));
 
-  return db
+  return (await db
     .select({
       submissionId: submissions.id,
       candidateName: candidates.firstName,
@@ -218,7 +218,7 @@ export function offerReadySubmissions() {
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(and(eq(submissions.status, "active"), inArray(submissions.stage, ["interview", "offer"])))
     .orderBy(desc(submissions.stageSince))
-    .all()
+    )
     .filter((r) => !existing.has(r.submissionId))
     .map((r) => ({
       submissionId: r.submissionId,

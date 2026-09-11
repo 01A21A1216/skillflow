@@ -1,7 +1,7 @@
 import "server-only";
 
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
+import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "@/db";
 import {
@@ -77,17 +77,17 @@ const ACTIVE_SET = ACTIVE_STAGES as readonly string[];
  * One pass over submissions, grouped by requisition. Small enough dataset
  * that a single aggregate beats N per-row lookups.
  */
-function pipelineCounts() {
-  const rows = db
+async function pipelineCounts() {
+  const rows = (await db
     .select({
       requisitionId: submissions.requisitionId,
       stage: submissions.stage,
       status: submissions.status,
-      count: sql<number>`count(*)`,
+      count: sql<number>`count(*)::int`,
     })
     .from(submissions)
     .groupBy(submissions.requisitionId, submissions.stage, submissions.status)
-    .all();
+    );
 
   const map = new Map<
     string,
@@ -111,17 +111,17 @@ function pipelineCounts() {
   return map;
 }
 
-export function listRequisitions(
+export async function listRequisitions(
   filters: RequisitionFilters = {},
   actor?: User,
-): RequisitionRow[] {
+): Promise<RequisitionRow[]> {
   const hm = alias(users, "hm");
   const conditions = [];
 
   // Row-level scope. Applied as SQL so out-of-scope rows are never loaded,
   // rather than filtered out after the fact.
   if (actor) {
-    const scope = requisitionScope(actor);
+    const scope = await requisitionScope(actor);
     if (scope) conditions.push(scope);
   }
 
@@ -157,7 +157,7 @@ export function listRequisitions(
   if (filters.employmentType && filters.employmentType !== "all")
     conditions.push(eq(requisitions.employmentType, filters.employmentType));
 
-  const rows = db
+  const rows = (await db
     .select({
       req: requisitions,
       clientName: clients.name,
@@ -170,9 +170,9 @@ export function listRequisitions(
     .innerJoin(users, eq(users.id, requisitions.leadRecruiterId))
     .innerJoin(hm, eq(hm.id, requisitions.hiringManagerId))
     .where(conditions.length ? and(...conditions) : undefined)
-    .all();
+    );
 
-  const counts = pipelineCounts();
+  const counts = await pipelineCounts();
 
   let result: RequisitionRow[] = rows.map(({ req, clientName, clientTier, recruiterName, hiringManagerName }) => {
     const c = counts.get(req.id) ?? { active: 0, submitted: 0, interview: 0, offer: 0, hired: 0, total: 0 };
@@ -295,13 +295,13 @@ export function requisitionHealth(r: RequisitionRow): Health {
   };
 }
 
-export function getRequisition(reqId: string, actor?: User) {
+export async function getRequisition(reqId: string, actor?: User) {
   if (actor) {
-    const visible = visibleRequisitionIds(actor);
+    const visible = await visibleRequisitionIds(actor);
     if (visible !== null && !visible.includes(reqId)) return null;
   }
   const hm = alias(users, "hm");
-  const row = db
+  const row = (await db
     .select({
       req: requisitions,
       client: clients,
@@ -313,18 +313,18 @@ export function getRequisition(reqId: string, actor?: User) {
     .innerJoin(users, eq(users.id, requisitions.leadRecruiterId))
     .innerJoin(hm, eq(hm.id, requisitions.hiringManagerId))
     .where(eq(requisitions.id, reqId))
-    .get();
+    )[0];
 
   if (!row) return null;
 
-  const team = db
+  const team = (await db
     .select({ user: users, role: requisitionAssignees.role })
     .from(requisitionAssignees)
     .innerJoin(users, eq(users.id, requisitionAssignees.userId))
     .where(eq(requisitionAssignees.requisitionId, reqId))
-    .all();
+    );
 
-  const pipeline = db
+  const pipeline = (await db
     .select({
       submission: submissions,
       candidate: candidates,
@@ -335,39 +335,39 @@ export function getRequisition(reqId: string, actor?: User) {
     .innerJoin(users, eq(users.id, submissions.ownerId))
     .where(eq(submissions.requisitionId, reqId))
     .orderBy(desc(submissions.matchScore))
-    .all();
+    );
 
   const submissionIds = pipeline.map((p) => p.submission.id);
 
   const reqInterviews = submissionIds.length
-    ? db
+    ? (await db
         .select({ interview: interviews, candidate: candidates })
         .from(interviews)
         .innerJoin(submissions, eq(submissions.id, interviews.submissionId))
         .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
         .where(inArray(interviews.submissionId, submissionIds))
         .orderBy(desc(interviews.scheduledAt))
-        .all()
+        )
     : [];
 
   const reqOffers = submissionIds.length
-    ? db
+    ? (await db
         .select({ offer: offers, candidate: candidates })
         .from(offers)
         .innerJoin(submissions, eq(submissions.id, offers.submissionId))
         .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
         .where(inArray(offers.submissionId, submissionIds))
         .orderBy(desc(offers.createdAt))
-        .all()
+        )
     : [];
 
-  const reqNotes = db
+  const reqNotes = (await db
     .select({ note: notes, author: users })
     .from(notes)
     .innerJoin(users, eq(users.id, notes.authorId))
     .where(and(eq(notes.entityType, "requisition"), eq(notes.entityId, reqId)))
     .orderBy(desc(notes.pinned), desc(notes.createdAt))
-    .all();
+    );
 
   const stageCounts: Record<string, number> = {};
   for (const p of pipeline) {
@@ -391,42 +391,42 @@ export function getRequisition(reqId: string, actor?: User) {
 export type RequisitionDetail = NonNullable<ReturnType<typeof getRequisition>>;
 
 /** Distinct values for the filter bar, derived from live data. */
-export function requisitionFacets() {
-  const departments = db
+export async function requisitionFacets() {
+  const departments = (await db
     .selectDistinct({ value: requisitions.department })
     .from(requisitions)
     .orderBy(asc(requisitions.department))
-    .all()
+    )
     .map((r) => r.value);
 
-  const clientList = db
+  const clientList = (await db
     .select({ id: clients.id, name: clients.name })
     .from(clients)
     .orderBy(asc(clients.name))
-    .all();
+    );
 
-  const recruiterList = db
+  const recruiterList = (await db
     .select({ id: users.id, name: users.name })
     .from(users)
     .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
     .orderBy(asc(users.name))
-    .all();
+    );
 
   return { departments, clients: clientList, recruiters: recruiterList };
 }
 
-export function stageBreakdownForRequisitions(ids: string[]) {
+export async function stageBreakdownForRequisitions(ids: string[]) {
   if (!ids.length) return new Map<string, Record<Stage, number>>();
-  const rows = db
+  const rows = (await db
     .select({
       requisitionId: submissions.requisitionId,
       stage: submissions.stage,
-      count: sql<number>`count(*)`,
+      count: sql<number>`count(*)::int`,
     })
     .from(submissions)
     .where(and(inArray(submissions.requisitionId, ids), eq(submissions.status, "active")))
     .groupBy(submissions.requisitionId, submissions.stage)
-    .all();
+    );
 
   const map = new Map<string, Record<string, number>>();
   for (const r of rows) {

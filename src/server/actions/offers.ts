@@ -9,6 +9,7 @@ import type { User } from "@/db/schema";
 import { OFFER_STATUS, OFFER_TRANSITIONS, type OfferStatus } from "@/lib/domain";
 import { offerSchema, offerTransitionSchema } from "@/lib/validation";
 import { can, canTouchRequisition } from "@/server/authz";
+import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
 import {
   daysFromNow,
   denied,
@@ -21,14 +22,14 @@ import {
   type ActionState,
 } from "./shared";
 
-function context(submissionId: string) {
-  return db
+async function context(submissionId: string) {
+  return (await db
     .select({ submission: submissions, candidate: candidates, requisition: requisitions })
     .from(submissions)
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(eq(submissions.id, submissionId))
-    .get();
+    )[0];
 }
 
 function revalidateAll(requisitionId?: string, candidateId?: string) {
@@ -44,18 +45,18 @@ async function createOfferImpl(actor: User, formData: FormData): Promise<ActionS
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const ctx = context(input.submissionId);
+  const ctx = await context(input.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
   if (ctx.submission.status !== "active") {
     return fail("You can only draft an offer for an active candidate.");
   }
 
-  const open = db
+  const open = (await db
     .select()
     .from(offers)
     .where(eq(offers.submissionId, input.submissionId))
     .orderBy(desc(offers.createdAt))
-    .all()
+    )
     .find((o) => !["declined", "rescinded", "expired"].includes(o.status));
 
   if (open) {
@@ -64,17 +65,17 @@ async function createOfferImpl(actor: User, formData: FormData): Promise<ActionS
     );
   }
 
-  const previousVersions = db
+  const previousVersions = (await db
     .select()
     .from(offers)
     .where(eq(offers.submissionId, input.submissionId))
-    .all().length;
+    ).length;
 
   const id = newId("ofr");
   const now = new Date();
 
-  db.transaction((tx) => {
-    tx.insert(offers)
+  db.transaction(async (tx) => {
+    (await tx.insert(offers)
       .values({
         id,
         submissionId: input.submissionId,
@@ -89,18 +90,17 @@ async function createOfferImpl(actor: User, formData: FormData): Promise<ActionS
         createdById: actor.id,
         version: previousVersions + 1,
         notes: input.notes ?? "",
-        createdAt: now,
-        updatedAt: now,
+        ...stampNew(actor.id),
       })
-      .run();
+      );
 
     if (ctx.submission.stage !== "offer") {
-      tx.update(submissions)
+      (await tx.update(submissions)
         .set({ stage: "offer", stageSince: now, updatedAt: now })
         .where(eq(submissions.id, input.submissionId))
-        .run();
+        );
 
-      tx.insert(stageEvents)
+      (await tx.insert(stageEvents)
         .values({
           id: newId("stg"),
           submissionId: input.submissionId,
@@ -110,11 +110,11 @@ async function createOfferImpl(actor: User, formData: FormData): Promise<ActionS
           note: "Offer drafted",
           createdAt: now,
         })
-        .run();
+        );
     }
   });
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: input.submissionId,
     type: "offer_created",
@@ -133,15 +133,26 @@ async function updateOfferImpl(actor: User, formData: FormData): Promise<ActionS
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const existing = db.select().from(offers).where(eq(offers.id, offerId)).get();
+  const existing = (await db.select().from(offers).where(eq(offers.id, offerId)))[0];
   if (!existing) return fail("That offer no longer exists.");
   if (["accepted", "declined", "rescinded"].includes(existing.status)) {
     return fail("A settled offer can no longer be edited.");
   }
 
-  const ctx = context(existing.submissionId);
+  const ctx = await context(existing.submissionId);
+  const nextVersion = checkVersion("Offer", existing.rowVersion, formData.get("rowVersion"));
 
-  db.update(offers)
+  const changes = diffFields(existing, input, {
+    baseSalary: "Base salary",
+    bonusPercent: "Bonus",
+    signingBonus: "Signing bonus",
+    equityUnits: "Equity",
+    startDate: "Start date",
+    expiresAt: "Expiry",
+    notes: "Notes",
+  });
+
+  (await db.update(offers)
     .set({
       baseSalary: input.baseSalary,
       bonusPercent: input.bonusPercent,
@@ -153,17 +164,20 @@ async function updateOfferImpl(actor: User, formData: FormData): Promise<ActionS
       // Re-opening the terms invalidates any approval already given.
       status: existing.status === "approved" ? "pending_approval" : existing.status,
       approvedById: existing.status === "approved" ? null : existing.approvedById,
-      updatedAt: new Date(),
+      ...stamp(actor.id, nextVersion),
     })
     .where(eq(offers.id, offerId))
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: existing.submissionId,
     type: "offer_status",
     actorId: actor.id,
-    summary: `Offer terms revised${ctx ? ` for ${ctx.candidate.firstName} ${ctx.candidate.lastName}` : ""}`,
+    summary: `Offer terms revised${ctx ? ` for ${ctx.candidate.firstName} ${ctx.candidate.lastName}` : ""}${
+      changes.length ? ` — ${describeChanges(changes)}` : ""
+    }`,
+    changes,
     meta: { offerId },
   });
 
@@ -176,7 +190,7 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
   if (!parsed.success) return parsed.state;
   const { offerId, status, declineReason } = parsed.data;
 
-  const offer = db.select().from(offers).where(eq(offers.id, offerId)).get();
+  const offer = (await db.select().from(offers).where(eq(offers.id, offerId)))[0];
   if (!offer) return fail("That offer no longer exists.");
 
   const from = offer.status as OfferStatus;
@@ -191,9 +205,9 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
     return fail("Pick a reason so we can learn from it.", { declineReason: "Reason required" });
   }
 
-  const ctx = context(offer.submissionId);
+  const ctx = await context(offer.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
-  if (!canTouchRequisition(actor, ctx.requisition.id)) return denied("that offer");
+  if (!await canTouchRequisition(actor, ctx.requisition.id)) return denied("that offer");
   // Approval is a separate permission from progressing an offer: a recruiter
   // may extend and record a response, but must not sign off their own terms.
   if (to === "approved" && !can(actor, "offer.approve")) {
@@ -202,26 +216,26 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
 
   const now = new Date();
 
-  db.transaction((tx) => {
-    tx.update(offers)
+  db.transaction(async (tx) => {
+    (await tx.update(offers)
       .set({
         status: to,
         approvedById: to === "approved" ? actor.id : offer.approvedById,
         extendedAt: to === "extended" ? now : offer.extendedAt,
         respondedAt: ["accepted", "declined"].includes(to) ? now : offer.respondedAt,
         declineReason: to === "declined" ? (declineReason ?? null) : offer.declineReason,
-        updatedAt: now,
+        ...stamp(actor.id, offer.rowVersion + 1),
       })
       .where(eq(offers.id, offerId))
-      .run();
+      );
 
     if (to === "accepted") {
-      tx.update(submissions)
+      (await tx.update(submissions)
         .set({ stage: "hired", status: "hired", stageSince: now, updatedAt: now })
         .where(eq(submissions.id, offer.submissionId))
-        .run();
+        );
 
-      tx.insert(stageEvents)
+      (await tx.insert(stageEvents)
         .values({
           id: newId("stg"),
           submissionId: offer.submissionId,
@@ -231,16 +245,16 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
           note: "Offer accepted",
           createdAt: now,
         })
-        .run();
+        );
 
-      tx.update(candidates)
+      (await tx.update(candidates)
         .set({ status: "placed", updatedAt: now })
         .where(eq(candidates.id, ctx.candidate.id))
-        .run();
+        );
     }
 
     if (["declined", "rescinded"].includes(to) && ctx.submission.status === "active") {
-      tx.update(submissions)
+      (await tx.update(submissions)
         .set({
           stage: to === "declined" ? "withdrawn" : "rejected",
           status: to === "declined" ? "withdrawn" : "rejected",
@@ -250,9 +264,9 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
           updatedAt: now,
         })
         .where(eq(submissions.id, offer.submissionId))
-        .run();
+        );
 
-      tx.insert(stageEvents)
+      (await tx.insert(stageEvents)
         .values({
           id: newId("stg"),
           submissionId: offer.submissionId,
@@ -262,22 +276,22 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
           note: declineReason ?? "Offer rescinded",
           createdAt: now,
         })
-        .run();
+        );
     }
   });
 
   if (to === "accepted") {
-    const req = db.select().from(requisitions).where(eq(requisitions.id, ctx.requisition.id)).get();
+    const req = (await db.select().from(requisitions).where(eq(requisitions.id, ctx.requisition.id)))[0];
     if (req) {
-      const hires = db
+      const hires = (await db
         .select()
         .from(submissions)
         .where(eq(submissions.requisitionId, req.id))
-        .all()
+        )
         .filter((s) => s.status === "hired").length;
 
       const filled = Math.min(hires, req.openings);
-      db.update(requisitions)
+      (await db.update(requisitions)
         .set({
           filled,
           status: hires >= req.openings && ["open", "on_hold", "draft"].includes(req.status) ? "filled" : req.status,
@@ -286,11 +300,11 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
           updatedAt: now,
         })
         .where(eq(requisitions.id, req.id))
-        .run();
+        );
     }
   }
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: offer.submissionId,
     type: "offer_status",
@@ -298,6 +312,7 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
     summary: `Offer ${OFFER_STATUS[to].label.toLowerCase()} for ${ctx.candidate.firstName} ${ctx.candidate.lastName}${
       declineReason ? ` — ${declineReason}` : ""
     }`,
+    changes: [{ field: "status", label: "Offer status", from, to }],
     meta: { requisitionId: ctx.requisition.id, candidateId: ctx.candidate.id, offerId, from, to },
   });
 

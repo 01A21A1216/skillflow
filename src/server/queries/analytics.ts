@@ -54,13 +54,13 @@ export interface FunnelStep {
   dropOff: number;
 }
 
-export function funnel(since?: Date): FunnelStep[] {
-  const rows = db
-    .select({ stage: stageEvents.toStage, count: sql<number>`count(distinct ${stageEvents.submissionId})` })
+export async function funnel(since?: Date): Promise<FunnelStep[]> {
+  const rows = (await db
+    .select({ stage: stageEvents.toStage, count: sql<number>`count(distinct ${stageEvents.submissionId})::int` })
     .from(stageEvents)
     .where(since ? gte(stageEvents.createdAt, since) : undefined)
     .groupBy(stageEvents.toStage)
-    .all();
+    );
 
   const byStage = new Map(rows.map((r) => [r.stage, r.count]));
   const top = byStage.get("sourced") ?? 0;
@@ -91,8 +91,8 @@ export interface StageVelocity {
   samples: number;
 }
 
-export function stageVelocity(since?: Date): StageVelocity[] {
-  const events = db
+export async function stageVelocity(since?: Date): Promise<StageVelocity[]> {
+  const events = (await db
     .select({
       submissionId: stageEvents.submissionId,
       toStage: stageEvents.toStage,
@@ -101,7 +101,7 @@ export function stageVelocity(since?: Date): StageVelocity[] {
     .from(stageEvents)
     .where(since ? gte(stageEvents.createdAt, since) : undefined)
     .orderBy(stageEvents.submissionId, stageEvents.createdAt)
-    .all();
+    );
 
   const durations = new Map<string, number[]>();
   let currentSub: string | null = null;
@@ -144,8 +144,8 @@ export interface TimeToHire {
   medianTimeToHire: number;
 }
 
-export function timeToHire(since?: Date): TimeToHire {
-  const hires = db
+export async function timeToHire(since?: Date): Promise<TimeToHire> {
+  const hires = (await db
     .select({
       submissionId: submissions.id,
       createdAt: submissions.createdAt,
@@ -159,7 +159,7 @@ export function timeToHire(since?: Date): TimeToHire {
         ? and(eq(submissions.status, "hired"), gte(submissions.stageSince, since))
         : eq(submissions.status, "hired"),
     )
-    .all();
+    );
 
   const timeToFillDays: number[] = [];
   const timeToHireDays: number[] = [];
@@ -195,7 +195,7 @@ export interface MonthPoint {
   hires: number;
 }
 
-export function monthlyTrend(months = 12): MonthPoint[] {
+export async function monthlyTrend(months = 12): Promise<MonthPoint[]> {
   const start = new Date();
   start.setDate(1);
   start.setHours(0, 0, 0, 0);
@@ -219,11 +219,11 @@ export function monthlyTrend(months = 12): MonthPoint[] {
 
   const keyOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
-  const events = db
+  const events = (await db
     .select({ toStage: stageEvents.toStage, createdAt: stageEvents.createdAt })
     .from(stageEvents)
     .where(gte(stageEvents.createdAt, start))
-    .all();
+    );
 
   for (const e of events) {
     const bucket = buckets.get(keyOf(e.createdAt));
@@ -253,8 +253,8 @@ export interface SourceStat {
   avgDaysToHire: number;
 }
 
-export function sourceEffectiveness(since?: Date): SourceStat[] {
-  const rows = db
+export async function sourceEffectiveness(since?: Date): Promise<SourceStat[]> {
+  const rows = (await db
     .select({
       source: candidates.source,
       stage: submissions.stage,
@@ -266,20 +266,20 @@ export function sourceEffectiveness(since?: Date): SourceStat[] {
     .from(submissions)
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .where(since ? gte(submissions.createdAt, since) : undefined)
-    .all();
+    );
 
-  const reached = db
+  const reached = (await db
     .select({
       source: candidates.source,
       toStage: stageEvents.toStage,
-      count: sql<number>`count(distinct ${stageEvents.submissionId})`,
+      count: sql<number>`count(distinct ${stageEvents.submissionId})::int`,
     })
     .from(stageEvents)
     .innerJoin(submissions, eq(submissions.id, stageEvents.submissionId))
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .where(since ? gte(stageEvents.createdAt, since) : undefined)
     .groupBy(candidates.source, stageEvents.toStage)
-    .all();
+    );
 
   const map = new Map<string, SourceStat & { hireDays: number[] }>();
   const ensure = (source: string) => {
@@ -348,41 +348,41 @@ export interface RecruiterStat {
   load: number;
 }
 
-export function recruiterPerformance(since?: Date): RecruiterStat[] {
-  const people = db
+export async function recruiterPerformance(since?: Date): Promise<RecruiterStat[]> {
+  const people = (await db
     .select()
     .from(users)
     .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
-    .all()
+    )
     .filter((u) => u.capacity > 0);
 
-  const openReqRows = db
-    .select({ recruiterId: requisitions.leadRecruiterId, count: sql<number>`count(*)` })
+  const openReqRows = (await db
+    .select({ recruiterId: requisitions.leadRecruiterId, count: sql<number>`count(*)::int` })
     .from(requisitions)
     .where(inArray(requisitions.status, ["open", "on_hold", "draft"]))
     .groupBy(requisitions.leadRecruiterId)
-    .all();
+    );
   const openReqs = new Map(openReqRows.map((r) => [r.recruiterId, r.count]));
 
-  const activeRows = db
-    .select({ ownerId: submissions.ownerId, count: sql<number>`count(*)` })
+  const activeRows = (await db
+    .select({ ownerId: submissions.ownerId, count: sql<number>`count(*)::int` })
     .from(submissions)
     .where(eq(submissions.status, "active"))
     .groupBy(submissions.ownerId)
-    .all();
+    );
   const activePipeline = new Map(activeRows.map((r) => [r.ownerId, r.count]));
 
-  const reachedRows = db
+  const reachedRows = (await db
     .select({
       ownerId: submissions.ownerId,
       toStage: stageEvents.toStage,
-      count: sql<number>`count(distinct ${stageEvents.submissionId})`,
+      count: sql<number>`count(distinct ${stageEvents.submissionId})::int`,
     })
     .from(stageEvents)
     .innerJoin(submissions, eq(submissions.id, stageEvents.submissionId))
     .where(since ? gte(stageEvents.createdAt, since) : undefined)
     .groupBy(submissions.ownerId, stageEvents.toStage)
-    .all();
+    );
 
   const reached = new Map<string, Record<string, number>>();
   for (const r of reachedRows) {
@@ -391,13 +391,13 @@ export function recruiterPerformance(since?: Date): RecruiterStat[] {
     reached.set(r.ownerId, entry);
   }
 
-  const offerRows = db
-    .select({ ownerId: submissions.ownerId, status: offers.status, count: sql<number>`count(*)` })
+  const offerRows = (await db
+    .select({ ownerId: submissions.ownerId, status: offers.status, count: sql<number>`count(*)::int` })
     .from(offers)
     .innerJoin(submissions, eq(submissions.id, offers.submissionId))
     .where(since ? gte(offers.createdAt, since) : undefined)
     .groupBy(submissions.ownerId, offers.status)
-    .all();
+    );
 
   const offerTally = new Map<string, { accepted: number; declined: number }>();
   for (const r of offerRows) {
@@ -407,7 +407,7 @@ export function recruiterPerformance(since?: Date): RecruiterStat[] {
     offerTally.set(r.ownerId, entry);
   }
 
-  const hireRows = db
+  const hireRows = (await db
     .select({
       ownerId: submissions.ownerId,
       createdAt: submissions.createdAt,
@@ -415,7 +415,7 @@ export function recruiterPerformance(since?: Date): RecruiterStat[] {
     })
     .from(submissions)
     .where(eq(submissions.status, "hired"))
-    .all();
+    );
 
   const hireDays = new Map<string, number[]>();
   for (const r of hireRows) {
@@ -457,25 +457,25 @@ export function recruiterPerformance(since?: Date): RecruiterStat[] {
  * Breakdowns
  * ------------------------------------------------------------------ */
 
-export function departmentBreakdown() {
-  const rows = db
+export async function departmentBreakdown() {
+  const rows = (await db
     .select({
       department: requisitions.department,
-      openings: sql<number>`sum(${requisitions.openings})`,
-      filled: sql<number>`sum(${requisitions.filled})`,
-      reqs: sql<number>`count(*)`,
+      openings: sql<number>`sum(${requisitions.openings})::int`,
+      filled: sql<number>`sum(${requisitions.filled})::int`,
+      reqs: sql<number>`count(*)::int`,
     })
     .from(requisitions)
     .groupBy(requisitions.department)
-    .all();
+    );
 
-  const active = db
-    .select({ department: requisitions.department, count: sql<number>`count(*)` })
+  const active = (await db
+    .select({ department: requisitions.department, count: sql<number>`count(*)::int` })
     .from(submissions)
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(eq(submissions.status, "active"))
     .groupBy(requisitions.department)
-    .all();
+    );
   const activeMap = new Map(active.map((r) => [r.department, r.count]));
 
   return rows
@@ -487,8 +487,8 @@ export function departmentBreakdown() {
     .sort((a, b) => b.openings - a.openings);
 }
 
-export function clientBreakdown() {
-  const rows = db
+export async function clientBreakdown() {
+  const rows = (await db
     .select({
       id: clients.id,
       name: clients.name,
@@ -496,29 +496,29 @@ export function clientBreakdown() {
       industry: clients.industry,
       slaDays: clients.slaDays,
       reqs: sql<number>`count(${requisitions.id})`,
-      openings: sql<number>`coalesce(sum(${requisitions.openings}), 0)`,
-      filled: sql<number>`coalesce(sum(${requisitions.filled}), 0)`,
+      openings: sql<number>`coalesce(sum(${requisitions.openings}), 0)::int`,
+      filled: sql<number>`coalesce(sum(${requisitions.filled}), 0)::int`,
     })
     .from(clients)
     .leftJoin(requisitions, eq(requisitions.clientId, clients.id))
     .groupBy(clients.id)
-    .all();
+    );
 
-  const open = db
-    .select({ clientId: requisitions.clientId, count: sql<number>`count(*)` })
+  const open = (await db
+    .select({ clientId: requisitions.clientId, count: sql<number>`count(*)::int` })
     .from(requisitions)
     .where(inArray(requisitions.status, ["open", "on_hold", "draft"]))
     .groupBy(requisitions.clientId)
-    .all();
+    );
   const openMap = new Map(open.map((r) => [r.clientId, r.count]));
 
-  const active = db
-    .select({ clientId: requisitions.clientId, count: sql<number>`count(*)` })
+  const active = (await db
+    .select({ clientId: requisitions.clientId, count: sql<number>`count(*)::int` })
     .from(submissions)
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(eq(submissions.status, "active"))
     .groupBy(requisitions.clientId)
-    .all();
+    );
   const activeMap = new Map(active.map((r) => [r.clientId, r.count]));
 
   return rows
@@ -531,12 +531,11 @@ export function clientBreakdown() {
     .sort((a, b) => b.openReqs - a.openReqs || b.reqs - a.reqs);
 }
 
-export function rejectionReasons(since?: Date) {
-  const rows = db
+export async function rejectionReasons(since?: Date) {
+  const rows = (await db
     .select({
       reason: submissions.rejectionReason,
-      stage: submissions.stage,
-      count: sql<number>`count(*)`,
+      count: sql<number>`count(*)::int`,
     })
     .from(submissions)
     .where(
@@ -545,7 +544,7 @@ export function rejectionReasons(since?: Date) {
         : inArray(submissions.status, ["rejected", "withdrawn"]),
     )
     .groupBy(submissions.rejectionReason)
-    .all();
+    );
 
   const total = rows.reduce((s, r) => s + r.count, 0);
   return rows
@@ -558,8 +557,8 @@ export function rejectionReasons(since?: Date) {
  * Interview and feedback quality
  * ------------------------------------------------------------------ */
 
-export function interviewAnalytics(since?: Date) {
-  const rows = db
+export async function interviewAnalytics(since?: Date) {
+  const rows = (await db
     .select({
       type: interviews.type,
       status: interviews.status,
@@ -569,7 +568,7 @@ export function interviewAnalytics(since?: Date) {
     })
     .from(interviews)
     .where(since ? gte(interviews.scheduledAt, since) : undefined)
-    .all();
+    );
 
   const byType = new Map<string, { total: number; completed: number; positive: number }>();
   for (const r of rows) {
@@ -586,7 +585,7 @@ export function interviewAnalytics(since?: Date) {
   const totalHours = rows.reduce((s, r) => s + r.duration, 0) / 60;
 
   // Feedback turnaround: interview end to feedback submission.
-  const fbRows = db
+  const fbRows = (await db
     .select({
       submittedAt: feedback.submittedAt,
       scheduledAt: interviews.scheduledAt,
@@ -596,7 +595,7 @@ export function interviewAnalytics(since?: Date) {
     .from(feedback)
     .innerJoin(interviews, eq(interviews.id, feedback.interviewId))
     .where(since ? gte(interviews.scheduledAt, since) : undefined)
-    .all();
+    );
 
   const turnaround = fbRows
     .filter((r) => r.submittedAt)
@@ -632,8 +631,8 @@ export function interviewAnalytics(since?: Date) {
 }
 
 /** Interview hours carried by each panelist — used to spot burnout. */
-export function interviewerLoad(since?: Date) {
-  const rows = db
+export async function interviewerLoad(since?: Date) {
+  const rows = (await db
     .select({
       userId: interviewPanel.userId,
       name: users.name,
@@ -647,13 +646,13 @@ export function interviewerLoad(since?: Date) {
     .innerJoin(interviews, eq(interviews.id, interviewPanel.interviewId))
     .innerJoin(users, eq(users.id, interviewPanel.userId))
     .where(since ? gte(interviews.scheduledAt, since) : undefined)
-    .all();
+    );
 
   const submitted = new Set(
-    db
+    (await db
       .select({ key: sql<string>`${feedback.interviewId} || ':' || ${feedback.interviewerId}` })
       .from(feedback)
-      .all()
+      )
       .map((r) => r.key),
   );
 
@@ -679,12 +678,12 @@ export function interviewerLoad(since?: Date) {
  * Pipeline health snapshot
  * ------------------------------------------------------------------ */
 
-export function pipelineAging() {
-  const rows = db
+export async function pipelineAging() {
+  const rows = (await db
     .select({ stage: submissions.stage, stageSince: submissions.stageSince })
     .from(submissions)
     .where(eq(submissions.status, "active"))
-    .all();
+    );
 
   const buckets = [
     { label: "0-7 days", min: 0, max: 7, count: 0 },
@@ -714,17 +713,17 @@ export function pipelineAging() {
   };
 }
 
-export function offerTrend(months = 12) {
+export async function offerTrend(months = 12) {
   const start = new Date();
   start.setDate(1);
   start.setHours(0, 0, 0, 0);
   start.setMonth(start.getMonth() - (months - 1));
 
-  const rows = db
+  const rows = (await db
     .select({ status: offers.status, respondedAt: offers.respondedAt, createdAt: offers.createdAt })
     .from(offers)
     .where(gte(offers.createdAt, start))
-    .all();
+    );
 
   const buckets = new Map<string, { month: string; label: string; accepted: number; declined: number; rate: number }>();
   for (let i = 0; i < months; i += 1) {

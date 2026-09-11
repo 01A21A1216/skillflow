@@ -29,14 +29,14 @@ import {
   type ActionState,
 } from "./shared";
 
-function context(submissionId: string) {
-  return db
+async function context(submissionId: string) {
+  return (await db
     .select({ submission: submissions, candidate: candidates, requisition: requisitions })
     .from(submissions)
     .innerJoin(candidates, eq(candidates.id, submissions.candidateId))
     .innerJoin(requisitions, eq(requisitions.id, submissions.requisitionId))
     .where(eq(submissions.id, submissionId))
-    .get();
+    )[0];
 }
 
 async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<ActionState> {
@@ -44,9 +44,9 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const ctx = context(input.submissionId);
+  const ctx = await context(input.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
-  if (!canTouchRequisition(actor, ctx.requisition.id)) return denied("that requisition");
+  if (!await canTouchRequisition(actor, ctx.requisition.id)) return denied("that requisition");
 
   const when = new Date(input.scheduledAt);
   if (Number.isNaN(when.getTime())) {
@@ -54,7 +54,7 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
   }
 
   const panelPeople = input.panelIds.length
-    ? db.select().from(users).where(inArray(users.id, input.panelIds)).all()
+    ? (await db.select().from(users).where(inArray(users.id, input.panelIds)))
     : [];
 
   if (!panelPeople.length) {
@@ -64,14 +64,14 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
   const id = newId("ivw");
   const now = new Date();
 
-  const lastRound = db
+  const lastRound = (await db
     .select({ max: sql<number>`coalesce(max(${interviews.round}), 0)` })
     .from(interviews)
     .where(eq(interviews.submissionId, input.submissionId))
-    .get()!.max;
+    )[0]!.max;
 
-  db.transaction((tx) => {
-    tx.insert(interviews)
+  db.transaction(async (tx) => {
+    (await tx.insert(interviews)
       .values({
         id,
         submissionId: input.submissionId,
@@ -89,22 +89,22 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
         createdAt: now,
         updatedAt: now,
       })
-      .run();
+      );
 
     for (const person of panelPeople) {
-      tx.insert(interviewPanel)
+      (await tx.insert(interviewPanel)
         .values({ id: newId("pnl"), interviewId: id, userId: person.id, role: "interviewer" })
-        .run();
+        );
     }
 
     // Scheduling a loop moves the candidate into the interview stage.
     if (["sourced", "screening", "submitted"].includes(ctx.submission.stage)) {
-      tx.update(submissions)
+      (await tx.update(submissions)
         .set({ stage: "interview", stageSince: now, updatedAt: now })
         .where(eq(submissions.id, input.submissionId))
-        .run();
+        );
 
-      tx.insert(stageEvents)
+      (await tx.insert(stageEvents)
         .values({
           id: newId("stg"),
           submissionId: input.submissionId,
@@ -114,11 +114,11 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
           note: `Advanced when ${input.title} was scheduled`,
           createdAt: now,
         })
-        .run();
+        );
     }
   });
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: input.submissionId,
     type: "interview_scheduled",
@@ -145,19 +145,19 @@ async function updateInterviewOutcomeImpl(actor: User, formData: FormData): Prom
   if (!parsed.success) return parsed.state;
   const { interviewId, status, outcome } = parsed.data;
 
-  const interview = db.select().from(interviews).where(eq(interviews.id, interviewId)).get();
+  const interview = (await db.select().from(interviews).where(eq(interviews.id, interviewId)))[0];
   if (!interview) return fail("That interview no longer exists.");
 
-  const ctx = context(interview.submissionId);
+  const ctx = await context(interview.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
 
 
-  db.update(interviews)
+  (await db.update(interviews)
     .set({ status, outcome: status === "completed" ? outcome : "pending", updatedAt: new Date() })
     .where(eq(interviews.id, interviewId))
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: interview.submissionId,
     type: status === "cancelled" ? "interview_cancelled" : "interview_completed",
@@ -178,16 +178,16 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
   if (!parsed.success) return parsed.state;
   const input = parsed.data;
 
-  const interview = db.select().from(interviews).where(eq(interviews.id, input.interviewId)).get();
+  const interview = (await db.select().from(interviews).where(eq(interviews.id, input.interviewId)))[0];
   if (!interview) return fail("That interview no longer exists.");
 
-  const ctx = context(interview.submissionId);
+  const ctx = await context(interview.submissionId);
   if (!ctx) return fail("That candidate is no longer in this pipeline.");
 
-  const interviewer = db.select().from(users).where(eq(users.id, input.interviewerId)).get();
+  const interviewer = (await db.select().from(users).where(eq(users.id, input.interviewerId)))[0];
   if (!interviewer) return fail("Unknown interviewer.");
 
-  const onPanel = db
+  const onPanel = (await db
     .select()
     .from(interviewPanel)
     .where(
@@ -196,7 +196,7 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
         eq(interviewPanel.userId, input.interviewerId),
       ),
     )
-    .get();
+    )[0];
 
   if (!onPanel) {
     return fail(`${interviewer.name} is not on this interview panel.`, {
@@ -208,13 +208,13 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
     return fail("You can only submit your own feedback.");
   }
 
-  const existing = db
+  const existing = (await db
     .select()
     .from(feedback)
     .where(
       and(eq(feedback.interviewId, input.interviewId), eq(feedback.interviewerId, input.interviewerId)),
     )
-    .get();
+    )[0];
 
   const now = new Date();
   const values = {
@@ -231,9 +231,9 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
   };
 
   if (existing) {
-    db.update(feedback).set(values).where(eq(feedback.id, existing.id)).run();
+    (await db.update(feedback).set(values).where(eq(feedback.id, existing.id)));
   } else {
-    db.insert(feedback)
+    (await db.insert(feedback)
       .values({
         id: newId("fbk"),
         interviewId: input.interviewId,
@@ -241,17 +241,17 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
         createdAt: now,
         ...values,
       })
-      .run();
+      );
   }
 
   // Once every panelist has weighed in, settle the interview outcome from
   // the balance of recommendations rather than asking someone to restate it.
-  const all = db.select().from(feedback).where(eq(feedback.interviewId, input.interviewId)).all();
-  const panelSize = db
-    .select({ count: sql<number>`count(*)` })
+  const all = (await db.select().from(feedback).where(eq(feedback.interviewId, input.interviewId)));
+  const panelSize = (await db
+    .select({ count: sql<number>`count(*)::int` })
     .from(interviewPanel)
     .where(eq(interviewPanel.interviewId, input.interviewId))
-    .get()!.count;
+    )[0]!.count;
 
   if (all.length >= panelSize) {
     const score =
@@ -269,18 +269,18 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
     const settled =
       score >= 1.5 ? "strong_yes" : score >= 0.75 ? "yes" : score > 0 ? "lean_yes" : score > -1 ? "lean_no" : score > -1.75 ? "no" : "strong_no";
 
-    db.update(interviews)
+    (await db.update(interviews)
       .set({ status: "completed", outcome: settled, updatedAt: now })
       .where(eq(interviews.id, input.interviewId))
-      .run();
+      );
   } else if (interview.status === "scheduled" && interview.scheduledAt.getTime() < Date.now()) {
-    db.update(interviews)
+    (await db.update(interviews)
       .set({ status: "completed", updatedAt: now })
       .where(eq(interviews.id, input.interviewId))
-      .run();
+      );
   }
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: interview.submissionId,
     type: "feedback_submitted",
@@ -303,17 +303,17 @@ async function submitFeedbackImpl(actor: User, formData: FormData): Promise<Acti
 
 async function cancelInterviewImpl(actor: User, formData: FormData): Promise<ActionState> {
   const interviewId = String(formData.get("interviewId") ?? "");
-  const interview = db.select().from(interviews).where(eq(interviews.id, interviewId)).get();
+  const interview = (await db.select().from(interviews).where(eq(interviews.id, interviewId)))[0];
   if (!interview) return fail("That interview no longer exists.");
 
-  const ctx = context(interview.submissionId);
+  const ctx = await context(interview.submissionId);
 
-  db.update(interviews)
+  (await db.update(interviews)
     .set({ status: "cancelled", outcome: "pending", updatedAt: new Date() })
     .where(eq(interviews.id, interviewId))
-    .run();
+    );
 
-  logActivity({
+  await logActivity({
     entityType: "submission",
     entityId: interview.submissionId,
     type: "interview_cancelled",

@@ -62,15 +62,15 @@ function startOfDay(d = new Date()) {
   return copy;
 }
 
-export function listInterviews(
+export async function listInterviews(
   filters: InterviewFilters = {},
   actor?: User,
-): InterviewRow[] {
+): Promise<InterviewRow[]> {
   const now = Date.now();
   const conditions = [];
 
   if (actor) {
-    const scope = interviewScope(actor);
+    const scope = await interviewScope(actor);
     if (scope) conditions.push(scope);
   }
 
@@ -106,7 +106,7 @@ export function listInterviews(
   if (filters.requisition && filters.requisition !== "all")
     conditions.push(eq(requisitions.id, filters.requisition));
 
-  const rows = db
+  const rows = (await db
     .select({
       interview: interviews,
       candidate: candidates,
@@ -126,19 +126,19 @@ export function listInterviews(
         ? sql`${interviews.scheduledAt} desc`
         : asc(interviews.scheduledAt),
     )
-    .all();
+    );
 
   const ids = rows.map((r) => r.interview.id);
   if (!ids.length) return [];
 
-  const panelRows = db
+  const panelRows = (await db
     .select({ interviewId: interviewPanel.interviewId, user: users, role: interviewPanel.role })
     .from(interviewPanel)
     .innerJoin(users, eq(users.id, interviewPanel.userId))
     .where(inArray(interviewPanel.interviewId, ids))
-    .all();
+    );
 
-  const feedbackRows = db
+  const feedbackRows = (await db
     .select({
       interviewId: feedback.interviewId,
       interviewerId: feedback.interviewerId,
@@ -147,7 +147,7 @@ export function listInterviews(
     })
     .from(feedback)
     .where(inArray(feedback.interviewId, ids))
-    .all();
+    );
 
   const panelByInterview = new Map<string, { id: string; name: string; role: string }[]>();
   for (const p of panelRows) {
@@ -208,15 +208,15 @@ export function listInterviews(
 }
 
 /** Completed interviews where at least one panelist still owes feedback. */
-export function awaitingFeedback(limit?: number, actor?: User) {
-  const rows = listInterviews({ window: "past", status: "completed" }, actor).filter(
+export async function awaitingFeedback(limit?: number, actor?: User) {
+  const rows = (await listInterviews({ window: "past", status: "completed" }, actor)).filter(
     (r) => r.feedbackCount < r.panelSize,
   );
   return limit ? rows.slice(0, limit) : rows;
 }
 
-export function getInterview(interviewId: string) {
-  const row = db
+export async function getInterview(interviewId: string) {
+  const row = (await db
     .select({
       interview: interviews,
       candidate: candidates,
@@ -232,23 +232,23 @@ export function getInterview(interviewId: string) {
     .innerJoin(clients, eq(clients.id, requisitions.clientId))
     .innerJoin(users, eq(users.id, interviews.organizerId))
     .where(eq(interviews.id, interviewId))
-    .get();
+    )[0];
 
   if (!row) return null;
 
-  const panel = db
+  const panel = (await db
     .select({ user: users, role: interviewPanel.role })
     .from(interviewPanel)
     .innerJoin(users, eq(users.id, interviewPanel.userId))
     .where(eq(interviewPanel.interviewId, interviewId))
-    .all();
+    );
 
-  const fbs = db
+  const fbs = (await db
     .select({ feedback, interviewer: users })
     .from(feedback)
     .innerJoin(users, eq(users.id, feedback.interviewerId))
     .where(eq(feedback.interviewId, interviewId))
-    .all();
+    );
 
   return { ...row, panel, feedback: fbs };
 }
@@ -265,11 +265,11 @@ export function groupByDay(rows: InterviewRow[]) {
   return [...map.entries()].map(([date, items]) => ({ date, items }));
 }
 
-export function interviewerOptions() {
-  return db
+export async function interviewerOptions() {
+  return (await db
     .select({ id: users.id, name: users.name })
     .from(users)
     .where(inArray(users.role, ["interviewer", "hiring_manager", "recruiter", "recruitment_manager", "super_admin"]))
     .orderBy(asc(users.name))
-    .all();
+    );
 }

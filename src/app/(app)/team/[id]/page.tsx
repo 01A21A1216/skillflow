@@ -30,7 +30,7 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const detail = getTeamMember(id);
+  const detail = await getTeamMember(id);
   return { title: detail?.user.name ?? "Team member" };
 }
 
@@ -41,11 +41,11 @@ export default async function TeamMemberPage({
 }) {
   const { id } = await params;
   const actor = await requirePermission("team.view");
-  const detail = getTeamMember(id);
+  const detail = await getTeamMember(id);
   if (!detail) notFound();
 
   const { user, member, requisitions, managed, interviews } = detail;
-  const summaries = new Map(listRequisitions({ status: "all" }, actor).map((r) => [r.id, r]));
+  const summaries = new Map((await listRequisitions({ status: "all" }, actor)).map((r) => [r.id, r]));
 
   const owned = requisitions.filter((r) =>
     ["open", "on_hold", "draft"].includes(r.requisition.status),

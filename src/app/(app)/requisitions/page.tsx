@@ -81,11 +81,11 @@ export default async function RequisitionsPage({
   };
 
   const actor = await requirePermission("requisition.view.assigned");
-  const rows = listRequisitions(filters, actor);
-  const facets = requisitionFacets();
-  const breakdown = stageBreakdownForRequisitions(rows.map((r) => r.id));
+  const rows = await listRequisitions(filters, actor);
+  const facets = await requisitionFacets();
+  const breakdown = await stageBreakdownForRequisitions(rows.map((r) => r.id));
 
-  const allForCounts = listRequisitions({ status: "all" }, actor);
+  const allForCounts = await listRequisitions({ status: "all" }, actor);
   const summary = {
     open: allForCounts.filter((r) => r.status === "open").length,
     onHold: allForCounts.filter((r) => r.status === "on_hold").length,
@@ -107,7 +107,7 @@ export default async function RequisitionsPage({
             options={{
               clients: facets.clients,
               recruiters: facets.recruiters,
-              hiringManagers: hiringManagerOptions(),
+              hiringManagers: await hiringManagerOptions(),
               departments: facets.departments,
             }}
           />

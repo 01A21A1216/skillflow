@@ -16,34 +16,34 @@ import {
 import { average, pct } from "@/lib/utils";
 import { recruiterPerformance } from "./analytics";
 
-export function listUsers() {
-  return db.select().from(users).orderBy(asc(users.name)).all();
+export async function listUsers() {
+  return (await db.select().from(users).orderBy(asc(users.name)));
 }
 
-export function recruiterOptions() {
-  return db
+export async function recruiterOptions() {
+  return (await db
     .select({ id: users.id, name: users.name, role: users.role })
     .from(users)
     .where(inArray(users.role, ["recruiter", "recruitment_manager", "super_admin", "sourcer"]))
     .orderBy(asc(users.name))
-    .all();
+    );
 }
 
-export function hiringManagerOptions() {
-  return db
+export async function hiringManagerOptions() {
+  return (await db
     .select({ id: users.id, name: users.name, department: users.department })
     .from(users)
     .where(eq(users.role, "hiring_manager"))
     .orderBy(asc(users.name))
-    .all();
+    );
 }
 
-export function clientOptions() {
-  return db
+export async function clientOptions() {
+  return (await db
     .select({ id: clients.id, name: clients.name, tier: clients.tier })
     .from(clients)
     .orderBy(asc(clients.name))
-    .all();
+    );
 }
 
 export interface TeamMember {
@@ -68,20 +68,20 @@ export interface TeamMember {
   load: number;
 }
 
-export function teamOverview(): TeamMember[] {
-  const people = listUsers();
-  const perf = new Map(recruiterPerformance().map((p) => [p.id, p]));
+export async function teamOverview(): Promise<TeamMember[]> {
+  const people = await listUsers();
+  const perf = new Map((await recruiterPerformance()).map((p) => [p.id, p]));
 
   const owned = new Map(
-    db
-      .select({ ownerId: candidates.ownerId, count: sql<number>`count(*)` })
+    (await db
+      .select({ ownerId: candidates.ownerId, count: sql<number>`count(*)::int` })
       .from(candidates)
       .groupBy(candidates.ownerId)
-      .all()
+      )
       .map((r) => [r.ownerId, r.count]),
   );
 
-  const panelRows = db
+  const panelRows = (await db
     .select({
       userId: interviewPanel.userId,
       status: interviews.status,
@@ -89,13 +89,13 @@ export function teamOverview(): TeamMember[] {
     })
     .from(interviewPanel)
     .innerJoin(interviews, eq(interviews.id, interviewPanel.interviewId))
-    .all();
+    );
 
   const submittedKeys = new Set(
-    db
+    (await db
       .select({ key: sql<string>`${feedback.interviewId} || ':' || ${feedback.interviewerId}` })
       .from(feedback)
-      .all()
+      )
       .map((r) => r.key),
   );
 
@@ -111,22 +111,22 @@ export function teamOverview(): TeamMember[] {
   }
 
   const ratings = new Map<string, number[]>();
-  for (const r of db
+  for (const r of (await db
     .select({ interviewerId: feedback.interviewerId, overall: feedback.overall })
     .from(feedback)
-    .all()) {
+    )) {
     const list = ratings.get(r.interviewerId) ?? [];
     list.push(r.overall);
     ratings.set(r.interviewerId, list);
   }
 
   const hmReqs = new Map(
-    db
-      .select({ id: requisitions.hiringManagerId, count: sql<number>`count(*)` })
+    (await db
+      .select({ id: requisitions.hiringManagerId, count: sql<number>`count(*)::int` })
       .from(requisitions)
       .where(inArray(requisitions.status, ["open", "on_hold", "draft"]))
       .groupBy(requisitions.hiringManagerId)
-      .all()
+      )
       .map((r) => [r.id, r.count]),
   );
 
@@ -158,30 +158,30 @@ export function teamOverview(): TeamMember[] {
   });
 }
 
-export function getTeamMember(userId: string) {
-  const user = db.select().from(users).where(eq(users.id, userId)).get();
+export async function getTeamMember(userId: string) {
+  const user = (await db.select().from(users).where(eq(users.id, userId)))[0];
   if (!user) return null;
 
-  const member = teamOverview().find((m) => m.id === userId)!;
+  const member = (await teamOverview()).find((m) => m.id === userId)!;
 
-  const reqs = db
+  const reqs = (await db
     .select({ requisition: requisitions, clientName: clients.name })
     .from(requisitions)
     .innerJoin(clients, eq(clients.id, requisitions.clientId))
     .where(eq(requisitions.leadRecruiterId, userId))
     .orderBy(desc(requisitions.openedAt))
-    .all();
+    );
 
-  const managed = db
+  const managed = (await db
     .select({ requisition: requisitions, clientName: clients.name })
     .from(requisitions)
     .innerJoin(clients, eq(clients.id, requisitions.clientId))
     .where(eq(requisitions.hiringManagerId, userId))
     .orderBy(desc(requisitions.openedAt))
-    .all();
+    );
 
   const now = Date.now();
-  const panelHistory = db
+  const panelHistory = (await db
     .select({
       interview: interviews,
       candidate: candidates,
@@ -195,27 +195,27 @@ export function getTeamMember(userId: string) {
     .where(eq(interviewPanel.userId, userId))
     .orderBy(desc(interviews.scheduledAt))
     .limit(12)
-    .all()
+    )
     .map((row) => ({ ...row, isUpcoming: row.interview.scheduledAt.getTime() > now }));
 
   return { user, member, requisitions: reqs, managed, interviews: panelHistory };
 }
 
-export function getClient(clientId: string) {
-  const client = db.select().from(clients).where(eq(clients.id, clientId)).get();
+export async function getClient(clientId: string) {
+  const client = (await db.select().from(clients).where(eq(clients.id, clientId)))[0];
   if (!client) return null;
 
   const owner = client.accountOwnerId
-    ? db.select().from(users).where(eq(users.id, client.accountOwnerId)).get()
+    ? (await db.select().from(users).where(eq(users.id, client.accountOwnerId)))[0]
     : null;
 
-  const reqs = db
+  const reqs = (await db
     .select({ requisition: requisitions, recruiter: users })
     .from(requisitions)
     .innerJoin(users, eq(users.id, requisitions.leadRecruiterId))
     .where(eq(requisitions.clientId, clientId))
     .orderBy(desc(requisitions.openedAt))
-    .all();
+    );
 
   return { client, owner, requisitions: reqs };
 }

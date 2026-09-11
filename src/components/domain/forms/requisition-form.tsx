@@ -70,7 +70,15 @@ export function RequisitionFormModal({
     >
       {({ errors }) => (
         <>
-          {editing ? <input type="hidden" name="requisitionId" value={requisition!.id} /> : null}
+          {editing ? (
+            <>
+              <input type="hidden" name="requisitionId" value={requisition!.id} />
+              {/* The version this form was rendered with. The action compares it
+                  against the row and refuses a save that would overwrite
+                  someone else's edit. */}
+              <input type="hidden" name="rowVersion" value={requisition!.rowVersion} />
+            </>
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Job title" required error={errors.title} className="sm:col-span-2">

@@ -34,7 +34,7 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const detail = getClient(id);
+  const detail = await getClient(id);
   return { title: detail?.client.name ?? "Client" };
 }
 
@@ -47,12 +47,12 @@ export default async function ClientDetailPage({
 }) {
   const { id } = await params;
   const actor = await requirePermission("client.view");
-  const detail = getClient(id);
+  const detail = await getClient(id);
   if (!detail) notFound();
 
   const { client, owner, requisitions } = detail;
-  const summaries = listRequisitions({ client: id, status: "all" }, actor);
-  const breakdown = stageBreakdownForRequisitions(summaries.map((r) => r.id));
+  const summaries = await listRequisitions({ client: id, status: "all" }, actor);
+  const breakdown = await stageBreakdownForRequisitions(summaries.map((r) => r.id));
 
   const open = summaries.filter((r) => ["open", "on_hold", "draft"].includes(r.status));
   const activePipeline = summaries.reduce((s, r) => s + r.activeCount, 0);
