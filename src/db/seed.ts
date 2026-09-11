@@ -240,6 +240,19 @@ const hiringManagers = byRole("hiring_manager");
 const coordinators = users.filter((u) => u.title!.includes("Coordinator"));
 const interviewerPool = [...byRole("interviewer"), ...hiringManagers];
 
+/** Practices whose loops are hands-on technical rather than consultative. */
+const TECHNICAL_PRACTICES = [
+  "Oracle",
+  "Integration",
+  "SAP",
+  "Salesforce",
+  "Application Development",
+  "Data & Analytics",
+  "Cloud & Infrastructure",
+  "Security",
+  "Quality",
+];
+
 /* ------------------------------------------------------------------ *
  * 3a. Scorecard templates
  *
@@ -316,37 +329,35 @@ const GENERAL_SCORECARD = defineScorecard(
 );
 
 const ENGINEERING_SCORECARD = defineScorecard(
-  "Engineering",
-  "For technical panels: depth, design, and how someone operates what they build.",
+  "Technical",
+  "For hands-on panels: platform depth, solution design, and how someone runs what they build.",
   [
-    { key: "technical", label: "Technical depth", description: "Command of the stack this role runs on" },
-    { key: "system_design", label: "System design", description: "Structuring something bigger than one service" },
+    { key: "technical", label: "Platform depth", description: "Command of the platform this role runs on" },
+    { key: "system_design", label: "Solution design", description: "Structuring something bigger than one module" },
     { key: "problem_solving", label: "Problem solving", description: "Breaking down something unfamiliar" },
-    { key: "code_quality", label: "Code and craft", description: "Readability, testing, and what they leave behind" },
-    { key: "operational", label: "Operational ownership", description: "What happens when it breaks at 3am" },
+    { key: "integration", label: "Integration and data", description: "How it talks to everything the client already runs" },
+    { key: "operational", label: "Operational ownership", description: "What happens when it breaks during close" },
     { key: "collaboration", label: "Collaboration", description: "Working with people who disagree" },
   ],
 );
 
 const GTM_SCORECARD = defineScorecard(
-  "Go-to-market",
-  "For commercial panels: discovery, objection handling, and how they run a deal.",
+  "Functional delivery",
+  "For consulting and delivery panels: client credibility, scope discipline, and how they handle a programme under pressure.",
   [
-    { key: "discovery", label: "Discovery", description: "Getting to the real problem, not the stated one" },
-    { key: "domain", label: "Domain knowledge", description: "Credibility with a technical buyer" },
-    { key: "objection", label: "Objection handling", description: "Staying useful under pressure" },
-    { key: "process", label: "Deal process", description: "Forecast discipline and next-step hygiene" },
+    { key: "domain", label: "Functional depth", description: "Credibility with the client's finance or operations lead" },
+    { key: "discovery", label: "Requirements discovery", description: "Getting to the real problem, not the stated one" },
+    { key: "delivery", label: "Delivery discipline", description: "Scope, sequencing and holding a date" },
+    { key: "stakeholder", label: "Stakeholder handling", description: "Staying useful when a steering committee is unhappy" },
     { key: "communication", label: "Communication", description: "Clarity in writing and in the room" },
-    { key: "collaboration", label: "Collaboration", description: "Working with delivery and support" },
+    { key: "collaboration", label: "Collaboration", description: "Working with the technical team, not around it" },
   ],
 );
 
 /** Which card a department's panels fill in. */
 function scorecardFor(department: string): SeedScorecard {
-  if (["Engineering", "Security", "Data & Analytics", "Quality"].includes(department)) {
-    return ENGINEERING_SCORECARD;
-  }
-  if (department === "Go-to-Market") return GTM_SCORECARD;
+  if (TECHNICAL_PRACTICES.includes(department)) return ENGINEERING_SCORECARD;
+  if (department === "Program Delivery") return GTM_SCORECARD;
   return GENERAL_SCORECARD;
 }
 
@@ -457,7 +468,11 @@ for (let i = 0; i < REQ_COUNT; i += 1) {
   ] as [string, number][]);
 
   const [baseMin, baseMax] = titleSpec.base;
-  const reqSkills = sample(family.skills, int(5, 8));
+  // The family's first skill is its defining platform, so it always leads the
+  // must-haves: a requirement for an OIC developer that does not require OIC
+  // would be nonsense, and the match score built on top of it would be too.
+  const [defining, ...rest] = family.skills;
+  const reqSkills = [defining!, ...sample(rest, int(4, 7))];
   // Must-haves are the short list; whatever is left over is nice to have.
   const requiredCount = Math.min(int(3, 4), reqSkills.length - 1);
   const locationSpec = workMode === "remote" ? { city: "Remote (US)" } : pick(CITIES);
@@ -621,7 +636,12 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
     ["rehire", 2],
   ] as [string, number][]);
 
-  const skills = sample(family.skills, int(4, 7));
+  // Most candidates a recruiter would put forward hold the family's defining
+  // platform; the rest are adjacent people worth keeping in the pool.
+  const holdsDefining = chance(0.82);
+  const skills = holdsDefining
+    ? [family.skills[0]!, ...sample(family.skills.slice(1), int(3, 6))]
+    : sample(family.skills.slice(1), int(4, 6));
   const company = pick(CANDIDATE_COMPANIES);
   const notice = pick([0, 14, 14, 21, 30, 30, 60]);
   const relocate = chance(0.32);
@@ -653,9 +673,10 @@ function makeCandidate(family: (typeof JOB_FAMILIES)[number], createdMs: number)
     yearsExperience: years,
     seniority: titleSpec.seniority,
     skills,
-    // The one technology they lead with. Taken from the skills they have rather
-    // than invented, so search on it actually finds the right people.
-    primaryTechnology: skills[0] ?? "",
+    // The one technology they lead with. A family's skills are listed most
+    // defining first, so this is the headline platform they actually have
+    // rather than whichever skill the sample happened to draw first.
+    primaryTechnology: family.skills.find((k) => skills.includes(k)) ?? skills[0] ?? "",
     source,
     sourceDetail:
       source === "referral"
@@ -851,34 +872,40 @@ const REJECTION_BY_STAGE: Record<StageName, string[]> = {
   on_hold: [],
 };
 
+/**
+ * The loop a practice area runs.
+ *
+ * An agency loop has one shape a corporate one does not: the client round.
+ * We screen, the client interviews, and the offer follows the client's
+ * decision — which is also why Client Review is a pipeline stage.
+ */
 const INTERVIEW_LOOPS: Record<string, { type: string; title: string }[]> = {
   default: [
     { type: "phone_screen", title: "Recruiter screen" },
-    { type: "hiring_manager", title: "Hiring manager conversation" },
-    { type: "technical", title: "Craft deep dive" },
-    { type: "panel", title: "Panel loop" },
-    { type: "final", title: "Final round" },
+    { type: "technical", title: "Capability assessment" },
+    { type: "client", title: "Client technical round" },
+    { type: "hiring_manager", title: "Client hiring manager" },
+    { type: "final", title: "Final client round" },
   ],
-  engineering: [
+  technical: [
     { type: "phone_screen", title: "Recruiter screen" },
     { type: "technical", title: "Technical deep dive" },
-    { type: "system_design", title: "System design" },
-    { type: "hiring_manager", title: "Hiring manager conversation" },
-    { type: "final", title: "Values and final round" },
+    { type: "system_design", title: "Solution design discussion" },
+    { type: "client", title: "Client technical panel" },
+    { type: "hiring_manager", title: "Client hiring manager" },
   ],
-  gtm: [
+  functional: [
     { type: "phone_screen", title: "Recruiter screen" },
-    { type: "hiring_manager", title: "Hiring manager conversation" },
-    { type: "behavioral", title: "Discovery role play" },
+    { type: "behavioral", title: "Delivery experience interview" },
     { type: "client", title: "Client stakeholder round" },
-    { type: "final", title: "Executive final" },
+    { type: "hiring_manager", title: "Programme director" },
+    { type: "final", title: "Final client round" },
   ],
 };
 
 function loopFor(department: string) {
-  if (department === "Engineering" || department === "Security" || department === "Data & Analytics")
-    return INTERVIEW_LOOPS.engineering!;
-  if (department === "Go-to-Market") return INTERVIEW_LOOPS.gtm!;
+  if (TECHNICAL_PRACTICES.includes(department)) return INTERVIEW_LOOPS.technical!;
+  if (department === "Program Delivery") return INTERVIEW_LOOPS.functional!;
   return INTERVIEW_LOOPS.default!;
 }
 

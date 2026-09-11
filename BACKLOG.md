@@ -66,10 +66,10 @@ far cheaper now than after another dozen features land on the tables.
 
 ## 3. Phase 1 — Domain model alignment
 
-The spec's vocabulary is a staffing-agency model; the build used an in-house corporate
-model. **The breaking half is done** (1.1, 1.2, 1.4–1.7): stages, statuses, engagement
-types, visa and the skills split, with the seed rewritten around them. What remains
-(1.3, 1.8–1.12) is additive and does not block anything else.
+**Phase 1 is complete.** The spec's vocabulary is a staffing-agency model; the build used
+an in-house corporate one. Stages, statuses, engagement types, visa, the skills split, the
+staffing detail on every record, and — the last and largest — stages themselves moved out
+of code and into configuration.
 
 > **Answered while doing this work.** The build now reads as a **staffing agency**: clients,
 > W-2 / corp-to-corp, Client Review, bill rates and per-client visa policy. That was the
@@ -80,16 +80,16 @@ types, visa and the skills split, with the seed rewritten around them. What rema
 |---|---|---|---|---|---|
 | 1.1 | **Pipeline stages 6 → 11** | §8 | ✅ | M | Done — New, Screening, Qualified, Submitted, Client Review, Interview Scheduled, Interview Completed, Feedback Pending, Selected, Offer, Joined. The three interview-band stages are **recomputed** from the interviews and scorecards on every change (`syncInterviewStage`), so Feedback Pending always means a scorecard is genuinely owed. Existing databases upgrade with `scripts/migrate-vocabulary-v2.sql`, verified against the 1,370-submission dataset before the reseed. |
 | 1.2 | **Terminal states incl. On Hold** | §8 | ✅ | S | Done — On Hold joins Rejected and Withdrawn as a terminal stage, with its own action rather than being folded into close-out: no rejection reason, and reversible. Reopening reads the stage the candidate left back off the stage history, so parking someone does not cost them their place. `reopenSubmission` finally has a UI. |
-| 1.3 | **Configurable pipeline stages** | §8 | ❌ | L | Stages are a compile-time constant in `src/lib/domain.ts`. Making them admin-editable means moving them to a table and reworking every badge, board column and funnel query that reads the constant. |
+| 1.3 | **Configurable pipeline stages** | §8 | ✅ | L | Done — stages are rows, editable from `/settings`. The move that made it safe was giving each stage a **kind** (sourcing / submitted / interviewing / offer / placement) and rewriting every rule against the kind instead of against a literal key, so a stage added at runtime behaves correctly everywhere. `Stage` is now a string; membership is checked at the action boundary. A stage's key is fixed once it exists, and a built-in stage's kind is fixed, because both would silently rewrite the funnel and the interview sync. |
 | 1.4 | **Requirement statuses 6 → 10** | §5 | ✅ | S | Done, **derived**. The four progress statuses are computed from the pipeline (`requisitionProgress`) and never stored; the status menu and the form offer only the six a person decides. Filtering by a derived status is applied after the count aggregate, which is where the numbers already exist. |
 | 1.5 | **Staffing employment types** | §5 | ✅ | S | Done — W-2 and corp-to-corp are separate values, not a note on "contract", because they decide who employs the person and how the rate is quoted. `isRateBased()` replaces the `startsWith("contract")` test that drove bill rates. |
 | 1.6 | **Visa requirements on requirements** | §5 | ✅ | S | Done — `requisitions.visaRequirements` lists what the client accepts, drawn from the same vocabulary a candidate holds, so matching is set membership rather than free text. Empty means no constraint, not "none accepted". The board shows each candidate's authorization and flags mismatches. Codes expanded to the staffing set (Citizen, Green Card, H-1B, EAD, OPT/CPT, TN, Needs sponsorship). |
 | 1.7 | **Preferred vs required skills** | §5 | ✅ | S | Done — `requiredSkills` / `preferredSkills` on requisitions, both on the form and the brief. Unblocks honest match scoring (3.2). |
-| 1.8 | **Backup recruiter, source, attachments** | §5 | ❌ | S | |
-| 1.9 | **Candidate: primary technology, availability, rate, education, structured experience** | §6, §7 | 🟡 | M | Current columns stop at `expectedSalary` / `noticePeriodDays`. Education and experience need their own tables for the Candidate 360 sections. |
-| 1.10 | **Interview: start/end time, timezone, Confirmed status** | §10 | 🟡 | M | Today: `scheduledAt` + `durationMinutes`, no timezone. `users.timezone` is stored but never used for display — a distributed panel currently reads times in the viewer's locale with no indication of whose zone it is. |
-| 1.11 | **Feedback status enum + overdue SLA** | §10 | 🟡 | M | Feedback is currently inferred (`feedbackCount < panelSize`). Spec wants explicit Pending / Submitted / Overdue plus 24h / 48h / 72h buckets on a dedicated view. |
-| 1.12 | **Configurable scorecards** | §11 | 🟡 | M | `FEEDBACK_COMPETENCIES` is a fixed four-competency constant. Spec wants six categories, per-role templates, and a **Maybe** recommendation (current scale has no midpoint). |
+| 1.8 | **Backup recruiter, source, attachments** | §5 | ✅ | S | Done — `backupRecruiterId` and `source` on requirements, plus an `attachments` table behind a storage port with a permission-checked download route (which also lands 0.8). |
+| 1.9 | **Candidate: primary technology, availability, rate, education, structured experience** | §6, §7 | ✅ | M | Done — `primaryTechnology`, `availability` (separate from notice period, because contractors have one without the other), `availableFrom`, `expectedRate` + `rateBasis`, and `candidate_education` / `candidate_experience` tables rendered as Candidate 360 sections. |
+| 1.10 | **Interview: start/end time, timezone, Confirmed status** | §10 | ✅ | M | Done — `endsAt` stored rather than derived, `timezone` on the round, and a Confirmed status. The booked zone is shown only when it differs from the reader's, which is the only time it tells them anything. |
+| 1.11 | **Feedback status enum + overdue SLA** | §10 | ✅ | M | Done — the panel seat carries `feedbackStatus`, so "stood down" and "not got to it yet" are different facts and only one is chased. Completing a round starts a 24h clock; the interviews page reports 24/48/72h buckets and orders the queue by lateness. |
+| 1.12 | **Configurable scorecards** | §11 | ✅ | M | Done — `scorecard_templates` / `scorecard_criteria` with three seeded templates (General, Engineering, Go-to-market), scores stored as a keyed map so adding a competency is an edit rather than a migration, and a **Maybe** midpoint that scores zero. Editing templates in-app is the remaining half of 2.6. |
 
 ---
 
@@ -102,12 +102,12 @@ types, visa and the skills split, with the seed rewritten around them. What rema
 | 2.3 | **Duplicate detection** | §6, §20 | 🟡 | M | Exact email match only today. Spec wants phone + fuzzy matching, plus a merge flow that preserves both histories. |
 | 2.4 | **Notification centre** | §14 | ❌ | L | 13 trigger types. Build against a transport-agnostic interface so Teams/Slack/email drop in later without touching callers. |
 | 2.5 | **Activity / Audit page** | §13 | 🟡 | M | Data exists and renders inline on detail pages; there is no dedicated filterable view (by user, requirement, candidate, action, date). Depends on 0.5 for old/new values. |
-| 2.6 | **Settings module** | §3 | ❌ | M | Roles, permissions, pipeline stages, scorecard templates, SLA thresholds. |
+| 2.6 | **Settings module** | §3 | 🟡 | M | `/settings` exists. **Pipeline stages are fully editable** (add, rename, reorder, retune SLA, enable/disable) and the page shows the scorecard templates and the live permission matrix read-only. Remaining: editing scorecard templates and the permission matrix in-app. |
 | 2.7 | **Reports + CSV/Excel export** | §19 | 🟡 | M | Most of the 14 report metrics already exist in `src/server/queries/analytics.ts`; missing are the export path and Time-to-Interview. |
 | 2.8 | **Dashboard drill-down on every card** | §4 | 🟡 | S | Most KPI tiles link somewhere; §4 wants all 12 to land on the filtered record set. Three of the specified tiles (Selected, Joined, Rejected) do not exist yet — they depend on 1.1. |
 | 2.9 | **Recruiter personal dashboard** | §12 | 🟡 | M | `/team/[id]` covers roughly half the specified metrics; missing sourced/screened counts, follow-ups due, activity trend. |
 | 2.10 | **Communication log on Candidate 360** | §7 | ❌ | M | |
-| 2.11 | **Demo data → Oracle/ERP domain** | §26 | 🟡 | S | Volumes already exceed the spec (29 users, 12 clients, 54 requirements, 1,297 candidates vs 10/5/20/100). The **technology mix is wrong** — currently Go/React/Kubernetes; spec wants Oracle DBA, EBS, Fusion, OIC, SAP, Salesforce, .NET. Editing `src/db/seed-data.ts` job families is most of the work. |
+| 2.11 | **Demo data → Oracle/ERP domain** | §26 | ✅ | S | Done — twelve practice areas covering Oracle DBA / EBS / Fusion / OIC, SAP S/4HANA, Salesforce, .NET, data, cloud, security, QA and programme delivery. The desk, the client-side panels, the interview loops (which now include a client round) and the scorecards all moved with it. A requirement always requires its defining platform, and most candidates in a family hold it — without that, match scoring built on these skills would be noise. |
 
 ---
 
