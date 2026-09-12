@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 
 import type { Candidate } from "@/db/schema";
 import {
@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/field";
 import { createCandidate, updateCandidate } from "@/server/actions/candidates";
 import { FormModal } from "./form-shell";
+import { ResumeParserModal } from "./resume-parser";
 
 export interface CandidateFormOptions {
   owners: { id: string; name: string }[];
@@ -27,14 +28,22 @@ export function CandidateFormModal({
   onClose,
   options,
   candidate,
+  prefill,
 }: {
   open: boolean;
   onClose: () => void;
   options: CandidateFormOptions;
   candidate?: Candidate;
+  /**
+   * Starting values from the resume parser (§6). The same form as a blank
+   * one, deliberately: a parse is a head start, not a second way of creating
+   * a record.
+   */
+  prefill?: Partial<Candidate>;
 }) {
   const router = useRouter();
   const editing = Boolean(candidate);
+  const initial = (candidate ?? prefill) as Partial<Candidate> | undefined;
 
   return (
     <FormModal
@@ -71,25 +80,25 @@ export function CandidateFormModal({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="First name" required error={errors.firstName}>
-              <Input name="firstName" defaultValue={candidate?.firstName} required />
+              <Input name="firstName" defaultValue={initial?.firstName} required />
             </Field>
             <Field label="Last name" required error={errors.lastName}>
-              <Input name="lastName" defaultValue={candidate?.lastName} required />
+              <Input name="lastName" defaultValue={initial?.lastName} required />
             </Field>
             <Field label="Email" required error={errors.email}>
-              <Input name="email" type="email" defaultValue={candidate?.email} required />
+              <Input name="email" type="email" defaultValue={initial?.email} required />
             </Field>
             <Field label="Phone" error={errors.phone}>
-              <Input name="phone" defaultValue={candidate?.phone ?? ""} placeholder="+1 (512) 555-0142" />
+              <Input name="phone" defaultValue={initial?.phone ?? ""} placeholder="+1 (512) 555-0142" />
             </Field>
             <Field label="Location" required error={errors.location}>
-              <Input name="location" defaultValue={candidate?.location} placeholder="Austin, TX" required />
+              <Input name="location" defaultValue={initial?.location} placeholder="Austin, TX" required />
             </Field>
             <Field label="LinkedIn" error={errors.linkedinUrl}>
               <Input
                 name="linkedinUrl"
                 type="url"
-                defaultValue={candidate?.linkedinUrl ?? ""}
+                defaultValue={initial?.linkedinUrl ?? ""}
                 placeholder="https://linkedin.com/in/…"
               />
             </Field>
@@ -97,10 +106,10 @@ export function CandidateFormModal({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Current title" required error={errors.currentTitle}>
-              <Input name="currentTitle" defaultValue={candidate?.currentTitle} required />
+              <Input name="currentTitle" defaultValue={initial?.currentTitle} required />
             </Field>
             <Field label="Current company" required error={errors.currentCompany}>
-              <Input name="currentCompany" defaultValue={candidate?.currentCompany} required />
+              <Input name="currentCompany" defaultValue={initial?.currentCompany} required />
             </Field>
           </div>
 
@@ -112,12 +121,12 @@ export function CandidateFormModal({
                 min={0}
                 max={60}
                 step={0.5}
-                defaultValue={candidate?.yearsExperience ?? 5}
+                defaultValue={initial?.yearsExperience ?? 5}
                 required
               />
             </Field>
             <Field label="Level" error={errors.seniority}>
-              <Select name="seniority" defaultValue={candidate?.seniority ?? "mid"}>
+              <Select name="seniority" defaultValue={initial?.seniority ?? "mid"}>
                 {SENIORITIES.map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
@@ -126,7 +135,7 @@ export function CandidateFormModal({
               </Select>
             </Field>
             <Field label="Rating" hint="0 means not yet rated" error={errors.rating}>
-              <Select name="rating" defaultValue={String(candidate?.rating ?? 0)}>
+              <Select name="rating" defaultValue={String(initial?.rating ?? 0)}>
                 {[0, 1, 2, 3, 4, 5].map((n) => (
                   <option key={n} value={n}>
                     {n === 0 ? "Unrated" : `${n} star${n === 1 ? "" : "s"}`}
@@ -138,7 +147,7 @@ export function CandidateFormModal({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Source" error={errors.source}>
-              <Select name="source" defaultValue={candidate?.source ?? "sourced"}>
+              <Select name="source" defaultValue={initial?.source ?? "sourced"}>
                 {SOURCES.map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
@@ -149,12 +158,12 @@ export function CandidateFormModal({
             <Field label="Source detail" error={errors.sourceDetail}>
               <Input
                 name="sourceDetail"
-                defaultValue={candidate?.sourceDetail ?? ""}
+                defaultValue={initial?.sourceDetail ?? ""}
                 placeholder="Referred by Priya Raghavan"
               />
             </Field>
             <Field label="Owner" required error={errors.ownerId}>
-              <Select name="ownerId" defaultValue={candidate?.ownerId ?? options.owners[0]?.id} required>
+              <Select name="ownerId" defaultValue={initial?.ownerId ?? options.owners[0]?.id} required>
                 {options.owners.map((o) => (
                   <option key={o.id} value={o.id}>
                     {o.name}
@@ -163,7 +172,7 @@ export function CandidateFormModal({
               </Select>
             </Field>
             <Field label="Status" error={errors.status}>
-              <Select name="status" defaultValue={candidate?.status ?? "new"}>
+              <Select name="status" defaultValue={initial?.status ?? "new"}>
                 {CANDIDATE_STATUSES.map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
@@ -181,12 +190,12 @@ export function CandidateFormModal({
             >
               <Input
                 name="primaryTechnology"
-                defaultValue={candidate?.primaryTechnology ?? ""}
+                defaultValue={initial?.primaryTechnology ?? ""}
                 placeholder="Oracle EBS"
               />
             </Field>
             <Field label="Availability" error={errors.availability}>
-              <Select name="availability" defaultValue={candidate?.availability ?? "one_month"}>
+              <Select name="availability" defaultValue={initial?.availability ?? "one_month"}>
                 {AVAILABILITIES.map((a) => (
                   <option key={a.value} value={a.value}>
                     {a.label}
@@ -198,7 +207,7 @@ export function CandidateFormModal({
               <Input
                 name="availableFrom"
                 type="date"
-                defaultValue={candidate?.availableFrom ?? undefined}
+                defaultValue={initial?.availableFrom ?? undefined}
               />
             </Field>
           </div>
@@ -214,12 +223,12 @@ export function CandidateFormModal({
                 type="number"
                 min={0}
                 step={1}
-                defaultValue={candidate?.expectedRate ?? undefined}
+                defaultValue={initial?.expectedRate ?? undefined}
                 placeholder="85"
               />
             </Field>
             <Field label="Rate basis" error={errors.rateBasis}>
-              <Select name="rateBasis" defaultValue={candidate?.rateBasis ?? "hourly"}>
+              <Select name="rateBasis" defaultValue={initial?.rateBasis ?? "hourly"}>
                 {RATE_BASES.map((r) => (
                   <option key={r.value} value={r.value}>
                     {r.label}
@@ -236,7 +245,7 @@ export function CandidateFormModal({
                 type="number"
                 min={0}
                 step={1000}
-                defaultValue={candidate?.currentSalary ?? undefined}
+                defaultValue={initial?.currentSalary ?? undefined}
               />
             </Field>
             <Field label="Expected salary" error={errors.expectedSalary}>
@@ -245,7 +254,7 @@ export function CandidateFormModal({
                 type="number"
                 min={0}
                 step={1000}
-                defaultValue={candidate?.expectedSalary ?? undefined}
+                defaultValue={initial?.expectedSalary ?? undefined}
               />
             </Field>
             <Field label="Notice period" hint="Days" error={errors.noticePeriodDays}>
@@ -254,7 +263,7 @@ export function CandidateFormModal({
                 type="number"
                 min={0}
                 max={180}
-                defaultValue={candidate?.noticePeriodDays ?? 14}
+                defaultValue={initial?.noticePeriodDays ?? 14}
               />
             </Field>
           </div>
@@ -263,7 +272,7 @@ export function CandidateFormModal({
             <Field label="Work authorization" error={errors.workAuthorization}>
               <Select
                 name="workAuthorization"
-                defaultValue={candidate?.workAuthorization ?? "citizen"}
+                defaultValue={initial?.workAuthorization ?? "citizen"}
               >
                 {WORK_AUTHORIZATIONS.map((w) => (
                   <option key={w.value} value={w.value}>
@@ -274,7 +283,7 @@ export function CandidateFormModal({
             </Field>
             <Checkbox
               name="willingToRelocate"
-              defaultChecked={candidate?.willingToRelocate}
+              defaultChecked={initial?.willingToRelocate}
               label="Open to relocation"
               className="pb-2"
             />
@@ -283,7 +292,7 @@ export function CandidateFormModal({
           <Field label="Skills" hint="Comma separated." error={errors.skills}>
             <Input
               name="skills"
-              defaultValue={(candidate?.skills ?? []).join(", ")}
+              defaultValue={(initial?.skills ?? []).join(", ")}
               placeholder="Go, PostgreSQL, Kubernetes"
             />
           </Field>
@@ -291,7 +300,7 @@ export function CandidateFormModal({
           <Field label="Tags" hint="Comma separated." error={errors.tags}>
             <Input
               name="tags"
-              defaultValue={(candidate?.tags ?? []).join(", ")}
+              defaultValue={(initial?.tags ?? []).join(", ")}
               placeholder="silver-medalist, passive"
             />
           </Field>
@@ -299,7 +308,7 @@ export function CandidateFormModal({
           <Field label="Summary" error={errors.summary}>
             <Textarea
               name="summary"
-              defaultValue={candidate?.summary}
+              defaultValue={initial?.summary}
               placeholder="What stands out, what they are looking for, and anything the hiring manager should know."
             />
           </Field>
@@ -317,13 +326,24 @@ export function NewCandidateButton({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [parsing, setParsing] = useState(false);
+
   return (
     <>
-      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
-        <Plus className="size-4" />
-        Add candidate
-      </Button>
+      <div className="flex items-center gap-1.5">
+        {/* Most candidates arrive as a CV, so reading one sits beside the
+            blank form rather than behind it. */}
+        <Button variant="secondary" size="sm" onClick={() => setParsing(true)}>
+          <Sparkles className="size-4" />
+          From a resume
+        </Button>
+        <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+          <Plus className="size-4" />
+          Add candidate
+        </Button>
+      </div>
       <CandidateFormModal open={open} onClose={() => setOpen(false)} options={options} />
+      <ResumeParserModal open={parsing} onClose={() => setParsing(false)} options={options} />
     </>
   );
 }
