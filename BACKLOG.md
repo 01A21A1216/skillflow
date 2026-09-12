@@ -1,52 +1,71 @@
 # Recruitment Command Center — Backlog
 
 Derived from the product specification, measured against what is actually in the
-repository today. Every "Built" claim below was checked against the code, not recalled.
+repository today. Every claim below was re-checked against the running application on the
+last pass, not recalled.
 
 **Status key** — ✅ built · 🟡 partial · ❌ not started
 **Size** — S ≈ 1–2 days · M ≈ 3–5 days · L ≈ 1–2 weeks · XL ≈ 3+ weeks (one engineer, rough)
 
 ---
 
-## 1. Where v1 actually stands
+## 1. Where this stands
 
-The shipped build covers the spine of the spec: requirements, candidates, per-requirement
-submissions, interviews, feedback, offers, analytics, and an activity trail, with a
-drag-and-drop pipeline and a dashboard built around "what needs me today".
+**44 of 45 items are done.** The one that is not — 4.5, multi-tenancy — is not outstanding
+work; it was ruled out of scope (see open question 1). Every "done" claim below was
+re-checked against the running application, not recalled.
 
-Two things the spec calls out are **already correct** and should not be re-litigated:
+The build covers the spine of the spec — requirements, candidates, per-requirement
+submissions, interviews, feedback, offers, analytics and an activity trail — plus
+everything the later phases added: an assistant, explainable matching, resume and
+job-description parsing, notifications, reports, configurable settings, a job queue,
+integration ports, privacy tooling, full-text search and live multi-user updates.
+
+Two things the spec calls out were **already correct in v1** and should not be
+re-litigated:
 
 - **§25, per-requirement candidate status.** Status is stored on `submissions`
   (candidate × requirement), not globally on the candidate. One candidate can sit at
-  Interview on REQ-101 and Rejected on REQ-102, and the Candidate 360 page already lists
-  every relationship. `candidates.status` is a separate lifecycle field (active / placed /
+  Interview on REQ-101 and Rejected on REQ-102, and the Candidate 360 page lists every
+  relationship. `candidates.status` is a separate lifecycle field (active / placed /
   do-not-contact), not a pipeline stage.
 - **§27, the operating loop.** Ownership, current status, last update, stage age and next
   action are surfaced on the board, the requirement page and the dashboard action queue.
 
-**Phase 0 is complete.** Access control (0.1–0.3): sign-in, sessions, the seven specified
-roles, a database-backed permission matrix, SQL-level row scoping and server-side PII
-redaction. Platform and integrity (0.4–0.7): Postgres, structured change history, soft
-delete with recovery, and optimistic concurrency. 64 tests cover the permission matrix and
-the integrity rules.
+### What the work actually changed
 
-**Phase 1's breaking half is complete** (1.1, 1.2, 1.4–1.7): eleven pipeline stages, ten
-requirement statuses with the four progress ones derived rather than stored, W-2 and
-corp-to-corp engagements, per-client visa policy matched against candidate work
-authorization, and required-versus-preferred skills. 88 tests now cover the permission
-matrix, the integrity rules and the domain vocabulary.
+Three things turned out to be more than the line item suggested, and are worth carrying
+forward as context rather than re-discovering:
 
-The remaining gaps concentrate in three places: **AI** (nothing yet), **the additive
-domain fields** (candidate rate and availability, interview timezone, configurable
-scorecards), and **module completion** (resume upload and parsing, notifications, the
-audit viewer, settings, exports).
+- **Pipeline stages stopped being constants.** Making them configurable meant moving
+  every rule in the codebase off stage *names* and onto a stage's **phase** — sourcing,
+  submitted, interviewing, offer, placement. Roughly forty comparison sites. The result is
+  that an administrator can rename or reorder stages and nothing breaks, because nothing
+  was reading the name.
+- **"AI" is deterministic and local.** Matching, parsing and the assistant call no model,
+  for four reasons that are documented in the README: explainability (§16), NYC LL144 and
+  the EU AI Act, PII that must not silently leave the deployment, and the plain fact that
+  the fields being matched are already structured. `AiProvider` is a port, so a deployment
+  that wants a model adds one file.
+- **Postgres kept earning its place.** It was chosen in 0.4 for concurrent writers, and
+  has since become three more things: the job queue (`for update skip locked`), the
+  live-update bus (`LISTEN`/`NOTIFY`) and the search index (a generated `tsvector` with a
+  GIN index). Each of those would otherwise have been a second piece of infrastructure.
+
+### Tests
+
+**261 unit tests** (`npm test`, no database) and **25 integration tests**
+(`npm run test:integration`, real Postgres, real sessions, real server actions). The
+integration suite found two real bugs on its first run — nine unawaited transactions, and
+a seat that was never returned when an accepted offer was rescinded — neither of which any
+unit test could have reached.
 
 ---
 
 ## 2. Phase 0 — Foundations
 
-Everything here blocks or materially complicates later work. The schema items are also
-far cheaper now than after another dozen features land on the tables.
+**Phase 0 is complete.** Everything here blocked or materially complicated later work,
+and the schema items were far cheaper at 13 tables than they would have been at 26.
 
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
@@ -59,8 +78,12 @@ far cheaper now than after another dozen features land on the tables.
 | 0.7 | **Optimistic concurrency** | §20 | ✅ | M | Done — `rowVersion` compare-and-swap in the action layer, surfaced as a distinct "someone else saved first" prompt with a reload action. Verified end to end: a stale save is refused and the first editor's value survives. |
 | 0.8 | **Object storage for resumes/attachments** | §22, §23 | ✅ | M | Done alongside 1.8 — an `AttachmentStore` port with a local-disk default, type and size checks at upload, and a permission-checked download route rather than a guessable path. Swapping in S3 is one implementation of the interface. |
 
-> **Sequencing note.** 0.1–0.3 gate the AI assistant (§15 explicitly requires it to respect
-> user permissions), so AI cannot start before RBAC lands.
+> **Sequencing note, kept as a record.** 0.1–0.3 gated the AI assistant (§15 explicitly
+> requires it to respect user permissions), so AI could not start before RBAC landed. It
+> paid off in an unplanned way: because scoping was already a SQL predicate, the assistant
+> could be built as a closed structured query executed through the same scoped functions
+> the pages use — which is what makes prompt injection structurally uninteresting rather
+> than something to defend against.
 
 ---
 
@@ -95,6 +118,10 @@ of code and into configuration.
 
 ## 4. Phase 2 — Module completion
 
+**Phase 2 is complete.** The modules the spec named but v1 only sketched: resume handling,
+duplicate detection and merge, notifications, the audit viewer, settings, exports and a
+personal desk view for each recruiter.
+
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
 | 2.1 | **Resume upload** | §6 | ✅ | M | Done via the attachment store from 1.8 — the Candidate 360 has a "Resume and documents" panel, and downloads go through the permission-checked route. Parsing is 2.2. |
@@ -113,7 +140,8 @@ of code and into configuration.
 
 ## 5. Phase 3 — AI
 
-Blocked on Phase 0. Two risks below are not schedule risks — they are design constraints.
+**Phase 3 is complete.** It was blocked on Phase 0, and the two risks below turned out not
+to be schedule risks but design constraints — which is why none of it calls a model.
 
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
@@ -141,6 +169,10 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 
 ## 6. Phase 4 — Platform
 
+**Complete except 4.5**, which was ruled out of scope rather than left undone. Everything
+here is infrastructure the product needed before it could be run by more than one person
+at a time: live updates, background work, search, and integration seams.
+
 | # | Item | Spec | Status | Size | Notes |
 |---|---|---|---|---|---|
 | 4.1 | **Real-time multi-user updates** | §1 | ✅ | L | Done — SSE plus Postgres `LISTEN`/`NOTIFY`. Events carry a **hint, never data**: the entity, its id and who did it. The browser answers by re-rendering through the same scoped queries as a navigation, so nothing can be shown that the viewer could not have loaded themselves — pushing rows would have meant a second implementation of the row scoping living in the broadcast path. Published from `logActivity`, so every mutation is covered and a new one cannot silently fail to broadcast. Your own echo is ignored, bursts collapse into one refresh, and `router.refresh()` does not scroll, steal focus or discard a half-typed form. One `LISTEN` session per instance, fanned out in memory — verified with six concurrent streams open and exactly one database session. Proved end to end: a recruiter in a separate process moved a candidate and an untouched board in the browser showed them in the new column. |
@@ -153,9 +185,13 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 
 ## 7. Cross-cutting
 
+**Complete.** Tests, query performance, keyboard access, PII handling and a bound on how
+much the board renders. Two of these (5.1, 5.2) found real bugs rather than confirming
+there were none.
+
 | # | Item | Status | Size | Notes |
 |---|---|---|---|---|
-| 5.1 | **Automated tests** | ✅ | L | **252 unit tests** (`npm test`, no database needed): the permission matrix, the integrity rules, the domain vocabulary including a fully customised pipeline, the parsers, the matcher, the report definitions, the queue's arithmetic, the retention policy, and the action-layer rules extracted into `src/server/rules.ts`. Plus **21 integration tests** (`npm run test:integration`): real Postgres, real sessions created through `createSession`, real server actions called through `guarded`. Only three things are substituted — `cookies()`, `revalidatePath()` and `redirect()` — because they are meaningless outside a Next request; everything else is the real thing. They cover the whole sourced-to-hired path, access control from four roles, row scoping, PII redaction, optimistic concurrency, and the fire-and-forget side effects (notifications, queued integration calls, audit entries) that are silent when broken. Separate config so `npm test` stays fast and offline; fixtures are prefixed and swept by prefix, so a crashed run cleans up after itself. **They found two real bugs on first run** — see the commit. |
+| 5.1 | **Automated tests** | ✅ | L | **261 unit tests** (`npm test`, no database needed): the permission matrix, the integrity rules, the domain vocabulary including a fully customised pipeline, the parsers, the matcher, the report definitions, the queue's arithmetic, the retention policy, and the action-layer rules extracted into `src/server/rules.ts`. Plus **25 integration tests** (`npm run test:integration`): real Postgres, real sessions created through `createSession`, real server actions called through `guarded`. Only three things are substituted — `cookies()`, `revalidatePath()` and `redirect()` — because they are meaningless outside a Next request; everything else is the real thing. They cover the whole sourced-to-hired path, access control from four roles, row scoping, PII redaction, optimistic concurrency, the fire-and-forget side effects (notifications, queued integration calls, audit entries) that are silent when broken, and the live-update broadcast — including an assertion that an event carries a hint and never the changed data. Separate config so `npm test` stays fast and offline; fixtures are prefixed and swept by prefix, so a crashed run cleans up after itself. **They found two real bugs on first run** — see the commit. |
 | 5.2 | **Query performance** | ✅ | M | Done, and the worst of it was not on the list. **The sidebar badges** — rendered on every authenticated page — were four `(await listX()).length`, so every navigation built the full requisition list, every live submission with its interviews and offers, every open offer and every interview this week, to produce four integers. They are now `count(*)` over the same predicates, in parallel; the shared predicate definitions are exported so a badge cannot drift from the page it links to. **Detail pages loaded their record twice**, once in `generateMetadata` and once in the body — React `cache` makes that one read. **The dashboard** asked for the same interview list four times and the same offer list three times across independent sections; a per-request memo keyed on the actual filters (`server/request-cache.ts`) collapses those without prop-drilling. **Candidate pagination, filtering and sorting** moved into SQL with a grouped subquery for the counts the sort depends on, so the page reads 40 rows rather than 1,306; the skill facet is a `jsonb_array_elements_text` group-by rather than reading every candidate's skills to count them. `listRequisitions` grew an `ids` filter and narrows its stage-count aggregate to the rows it is listing. `getOffer` was deleted — nothing called it. Measured with a query trace: the dashboard 42 → 32 statements, `/team/[id]` 40 → 28, `/candidates` 12 → 9 with the 800ms one gone. |
 | 5.3 | **Keyboard-accessible pipeline** | ✅ | S | Done — `KeyboardSensor` with a **column-aware** coordinate getter: dnd-kit's default steps 25px per press, which is thirteen presses to cross one 312px column, and `sortableKeyboardCoordinates` is built for sortable lists rather than droppables. Left/right now jump a whole column. Cards are focusable with a visible ring and a label naming the person, their stage and the requirement; the screen-reader announcements say which column you are over rather than dnd-kit's default "position 3", which on a kanban means nothing. |
 | 5.4 | **PII handling: encryption at rest, retention, erasure** | ✅ | M | Done — all three data-subject rights, in `server/privacy.ts`. **Access:** a JSON export of everything held, deliberately including the parts a database makes easy to omit — rejection reasons, interview scorecards with the interviewer's name on them, internal notes. **Erasure:** anonymisation in place, not row deletion. Every identifying field is overwritten, documents are removed from the store, and free text is cleared from notes, contact history, scorecards, stage events and the audit trail; what survives is the shape of each application, which is the organisation's own record of its process and names nobody. Verified against the live database: 1 profile, 1 education, 3 employment, 1 contact, 1 note, 5 scorecards, 11 stage notes and 15 audit entries cleared, while the application, 5 interviews and every scorecard *score* survived. **Retention:** four rules, applied daily by a job (`retention.apply`). Both operations sit behind a new `privacy.manage` permission held by Super Admin alone, and each writes its own audit entry — which is what explains why the older entries next to it are empty. **Encryption at rest** is deliberately *not* implemented in the application and the settings screen says why: the key would sit beside the data and every search that makes the product work would break. It is a volume or managed-instance control. |
@@ -163,33 +199,77 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 
 ---
 
-## 8. Suggested sequence
+## 8. The sequence that was actually followed
 
-1. **0.1 → 0.3** Auth and RBAC. Unblocks AI and row-level scoping; every later feature would otherwise be rewritten to add guards.
-2. **0.5 → 0.7 + 0.4** Integrity migration (audit diffs, soft delete, concurrency) and Postgres, in one coordinated pass. Cheapest while the schema is 13 tables.
-3. **1.1 → 1.12** Domain alignment. Do before building UI on top of stage/status enums that are about to change.
-4. **2.x** Module completion, with 2.11 (demo data) pulled early — it costs a day and makes every demo credible.
-5. **3.x** AI, once permissions are real.
-6. **4.x / 5.x** Platform and hardening, continuous rather than a phase.
+Recorded because the ordering mattered, and because two of the calls were wrong.
 
-**5.1 (tests) should start alongside step 1**, not after step 6. Each phase here changes
-business rules that currently have no regression net.
+1. **0.1 → 0.3** Auth and RBAC first. Correct: every later feature would otherwise have
+   been rewritten to add guards, and §15 requires the assistant to respect permissions.
+2. **0.4 → 0.7** Postgres and the integrity migration in one coordinated pass. Correct,
+   and cheap at 13 tables in a way it would not have been at 26.
+3. **1.x** Domain alignment before building UI on the enums that were about to change.
+4. **2.x** Module completion, with demo data (2.11) pulled early — it cost a day and made
+   every subsequent screen judgeable.
+5. **3.x** AI, once permissions were real.
+6. **4.x / 5.x** Platform and hardening.
+
+**Two things this sequence got wrong:**
+
+- **5.1 (tests) should have started at step 1, as the note here always said, and did
+  not.** When the integration suite finally landed it found two bugs that had been live
+  for weeks. The estimate was also wrong in the other direction: the suite took a
+  fraction of the time the delay implied it would.
+- **0.4 was sized as a dialect swap and was not.** better-sqlite3 is synchronous and
+  every Postgres driver is async, so the query layer, the authz helpers and every page
+  had to become async — around 190 call sites.
+
+One further note on measurement, since it changed a design decision rather than just a
+number: 4.3 was first written with `ts_rank_cd`, which is the better ranking function on
+paper. Measured against 200,000 rows it took 1,107ms where `ts_rank` took 23ms. Nothing
+about the code suggested that; only running it did.
 
 ---
 
 ## 9. Open questions
 
-These change the plan materially, so they are worth answering before Phase 0 starts.
+Four of the original six were answered by the work. Two still need a decision from
+whoever owns the product.
 
-1. **Multi-tenant or single-company?** §23 says "if multi-company support is enabled". It is
-   the difference between 4.5 being skipped and it being the largest item on this list, and
-   it affects the schema from the first migration.
-2. **Is this an agency or an in-house team?** The spec reads agency (clients, W2/C2C, Client
-   Review, bill rates); the current build leans in-house. Confirming settles 1.4 and 1.5.
-3. **Requirement status: authored or derived?** (1.4) Deriving from pipeline state avoids two
-   sources of truth that will disagree.
-4. **Which AI provider and deployment posture?** Candidate resumes are PII; whether they can
-   leave your infrastructure determines whether 3.1–3.3 use a hosted API or a self-hosted model.
-5. **Which jurisdictions for hiring compliance?** (§16 risk note) Determines what 3.2 must
-   ship with.
-6. **Existing data to migrate**, or is the seeded organisation the starting point?
+**Answered:**
+
+1. **Multi-tenant or single-company?** → **Single-company.** This is why 4.5 is the one
+   item left undone rather than the largest item on the list. Revisiting it means
+   revisiting every query in the system, so it is a decision to make deliberately and not
+   by drift.
+2. **Agency or in-house?** → **Agency.** The spec reads agency (clients, W2/C2C, Client
+   Review, bill rates) and the build now matches: per-client visa policy, bill-rate bands,
+   a Client Review stage, and a seeded organisation of twelve ERP-staffing practices.
+3. **Requirement status: authored or derived?** → **Both, split.** Six statuses are
+   authored and stored on the row; the four progress ones (Active Sourcing, Candidate
+   Submitted, Interviewing, Offer) are derived on read. Storing those four would have
+   created a second source of truth that disagrees with the board the moment anyone moves
+   a card.
+4. **Which AI provider and deployment posture?** → **None, deliberately.** Deterministic
+   and in-process, behind an `AiProvider` port that carries an `external: boolean` the UI
+   reads — because "this left the building" is something a recruiter handling a CV should
+   be told. See §1 for the reasoning.
+
+**Still open — these need you:**
+
+5. **Which jurisdictions for hiring compliance?** (§16) The matcher is explainable by
+   construction and the retention policy is implemented, which covers the general case.
+   What it cannot do without an answer is meet a specific obligation: NYC LL144 wants an
+   annual bias audit and a published summary; the EU AI Act's high-risk classification
+   brings documentation and human-oversight duties. Naming the jurisdictions turns that
+   from a posture into a checklist.
+6. **Is there existing data to migrate**, or is the seeded organisation the starting
+   point? The schema is settled and the migrations are generated, so an import is now a
+   contained piece of work — but its size depends entirely on what the source system is
+   and how clean it is.
+
+Two smaller ones, noted rather than asked, because they are yours to decide and not mine
+to guess:
+
+- `LICENSE` still carries the Apache-2.0 placeholder `Copyright [yyyy] [name of copyright
+  owner]`. Filling in a copyright holder is a legal statement, so it is left blank.
+- The GitHub repository is named `skillflow`; the project is `skillsflow`.
