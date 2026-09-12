@@ -22,6 +22,7 @@ import {
 } from "@/components/domain/forms/stage-form";
 import { integrationStatus } from "@/server/integrations/ports";
 import { queueHealth } from "@/server/jobs/queue";
+import { realtimeStatus } from "@/server/realtime";
 import { erasureLog, RETENTION } from "@/server/privacy";
 import { RECURRING } from "@/server/jobs/schedule";
 import { listStageRows } from "@/server/pipeline";
@@ -52,6 +53,7 @@ export default async function SettingsPage() {
   const integrations = integrationStatus();
   const queue = await queueHealth();
   const erasures = await erasureLog();
+  const live = realtimeStatus();
 
   // How many people are standing in each stage, so a delete can be refused with
   // a reason rather than stranding them somewhere nothing renders.
@@ -277,9 +279,13 @@ export default async function SettingsPage() {
 
           <div className="grid grid-cols-2 gap-px border-y border-border-base bg-[hsl(var(--border))] sm:grid-cols-5">
             {[
+              {
+                label: "Live streams",
+                value: live.connected ? live.streams : "—",
+                alarming: !live.connected,
+              },
               { label: "Waiting", value: queue.counts.pending },
               { label: "Running", value: queue.counts.running },
-              { label: "Done today", value: queue.counts.done },
               { label: "Failed", value: queue.counts.failed, alarming: queue.counts.failed > 0 },
               {
                 label: "Oldest waiting",
@@ -383,6 +389,13 @@ export default async function SettingsPage() {
           ) : null}
 
           <p className="border-t border-border-base px-5 py-3 text-[12px] leading-relaxed text-content-subtle">
+            Live updates travel by Postgres <code className="rounded bg-surface-muted px-1 py-0.5 font-mono text-[11px]">notify</code>, so every
+            application instance hears a change and relays it to the browsers it is holding open
+            &mdash; one database session per instance, not per tab. What crosses is a hint, never
+            data: a browser responds by re-rendering through its own scoped queries, so nobody
+            can be shown a row they could not have loaded themselves.
+            <br />
+            <br />
             The queue is a Postgres table claimed with{" "}
             <code className="rounded bg-surface-muted px-1 py-0.5 font-mono text-[11px]">
               for update skip locked

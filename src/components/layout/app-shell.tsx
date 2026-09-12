@@ -27,6 +27,7 @@ import {
 import type { User } from "@/db/schema";
 import { cn } from "@/lib/utils";
 import { setLocalFlag, useLocalFlag } from "@/lib/browser-store";
+import { LiveUpdates } from "@/components/live-updates";
 import { Button } from "@/components/ui/button";
 import { UserMenu } from "./user-menu";
 import { GlobalSearch } from "./global-search";
@@ -277,6 +278,9 @@ export function AppShell({
 
         <main className="min-w-0 flex-1">{children}</main>
       </div>
+
+      {/* Keeps this browser in step with everybody else's changes (§1). */}
+      <LiveUpdates actorId={actor.id} />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { activities, type FieldChange, type User } from "@/db/schema";
 import type { PermissionKey } from "@/lib/permissions";
 import { ForbiddenError, loadPermissionMatrix } from "@/server/authz";
 import { ConcurrencyError, concurrencyMessage } from "@/server/integrity";
+import { publish } from "@/server/realtime";
 import { actorWithPermission } from "@/server/session";
 
 export interface ActionState {
@@ -160,6 +161,31 @@ export async function logActivity(entry: {
     changes: entry.changes?.length ? entry.changes : null,
     meta: entry.meta ?? null,
     createdAt: new Date(),
+  });
+
+  /*
+   * Tell every other open browser (item 4.1).
+   *
+   * Hooked here rather than added to each action, because "something was
+   * audited" and "something changed" are the same event — every mutation in
+   * the application already writes an activity row, so one hook gives
+   * complete coverage and there is no way to add a mutation later that
+   * silently fails to broadcast.
+   *
+   * A hint only: the entity, its id and who did it. What actually reaches a
+   * screen is re-rendered by the same scoped queries as a navigation.
+   */
+  const scope: Record<string, string> = {};
+  for (const key of ["requisitionId", "candidateId", "submissionId", "interviewId"]) {
+    const value = entry.meta?.[key];
+    if (typeof value === "string") scope[key] = value;
+  }
+
+  await publish({
+    entity: entry.entityType,
+    entityId: entry.entityId,
+    actorId: entry.actorId,
+    scope: Object.keys(scope).length ? scope : undefined,
   });
 }
 
