@@ -32,8 +32,16 @@ with another database already running on your machine.
 | **Offers** | Offer register with a legal-transition state machine, position against the approved salary band, total compensation, expiry tracking, decline-reason capture and acceptance-rate trend. |
 | **Analytics** | Funnel with per-step conversion, stage velocity, time-to-fill and time-to-hire, 12-month throughput, source effectiveness, recruiter performance, pipeline aging, close-out reasons, interview operations and interviewer load. |
 | **Team / Clients** | Recruiter capacity and utilisation, interviewer load and feedback debt; client accounts with demand, coverage and fill rate. |
+| **Assistant** | Ask a question in English — "who is waiting on client feedback", "senior Oracle DBAs available in two weeks" — and get the answer as rows you can open. The question becomes a structured query executed through the same scoped functions the pages use, so it cannot return anything you could not have navigated to. |
+| **Matching** | Candidate-to-requirement scoring across seven weighted factors that sum to 100, each one showing its own verdict and the evidence for it. Explainable by construction: there is no score without a reason beside it. |
+| **Parsing** | A resume or a job description becomes a filled-in form, field by field, each with a confidence and the text it came from. Only confident fields are pre-filled; everything runs in-process, so a CV is never sent anywhere. |
+| **Notifications** | Fourteen triggers, deduplicated per person per fact, with an inbox. The four that report an *absence* — feedback that has not arrived, a requirement that is not filling, a candidate nobody has touched — run as scheduled jobs rather than on a page render. |
+| **Reports** | Twelve report definitions with CSV export, sharing their rows with the screens that chart them, so an export can never disagree with the picture above it. |
+| **Settings** | Pipeline stages, scorecard templates and the permission matrix, all editable in-app; plus background-job health and the retention policy. |
+| **Live updates** | Changes made by anybody appear on everybody's open screen, over SSE and Postgres `LISTEN`/`NOTIFY`. |
 | **Access control** | Sign-in, sessions, and the seven specified roles with a configurable permission matrix. What each person sees and can do is decided in the query and action layers, not the UI. |
 | **Data integrity** | Structured change history (field, before, after), soft delete with recovery, and optimistic concurrency so two recruiters editing one record cannot silently overwrite each other. |
+| **Privacy** | Subject-access export, erasure that is not soft delete, and a retention policy applied daily. |
 
 Cross-cutting: ⌘K global search, URL-driven filters (every view is shareable and
 survives a reload), light/dark themes, and an audit trail that attributes every write to
@@ -64,9 +72,12 @@ roles is the quickest way to see access control working:
 - **PostgreSQL 16** via **node-postgres**, with **Drizzle ORM** and generated migrations
 - **Tailwind CSS v4** on a semantic design-token layer
 - **Zod** for input validation, **Recharts** for charts, **dnd-kit** for the board
+- **Postgres full-text search** for the search box, **`LISTEN`/`NOTIFY`** for live updates,
+  and a Postgres table as the background job queue
 
 No API keys and no cloud services — the only dependency is a Postgres container,
-started by `npm run db:up`.
+started by `npm run db:up`. The "AI" features are deterministic and run in-process;
+see [Matching, parsing and the assistant](#matching-parsing-and-the-assistant).
 
 ---
 
@@ -75,15 +86,26 @@ started by `npm run db:up`.
 ```
 src/
   db/
-    schema.ts        13 tables, typed end to end
-    index.ts         one cached connection per process; runs migrations on boot
+    schema.ts        26 tables, typed end to end
+    index.ts         one cached pool per process
     seed.ts          simulation that generates the sample organisation
   lib/
     domain.ts        every stage, status and enum declared once, with label + colour
     validation.ts    Zod schemas shared by forms and actions
+    match-score.ts   candidate-to-requirement scoring, explainable by construction
+    jd-parse.ts      job descriptions -> fields, with confidence and evidence
+    resume-parse.ts  resumes -> fields, likewise
+    nl-query.ts      English -> a closed, structured query
   server/
-    queries/         read models (server-only, synchronous)
+    queries/         read models, all scoped by the actor
     actions/         "use server" mutations with validation + audit logging
+    rules.ts         the business rules, as pure functions
+    jobs/            a Postgres-backed work queue and its worker
+    integrations/    calendar, email and job-board ports with no-op defaults
+    realtime.ts      LISTEN/NOTIFY fan-out behind the SSE stream
+    search.ts        full-text query building
+    privacy.ts       subject access, erasure, retention
+    __integration__/ tests that drive real actions through real sessions
   components/
     ui/              primitives (button, modal, table, toast, meter…)
     charts/          validated palette + chart components
@@ -99,9 +121,17 @@ the validation schemas and every badge in the UI read from the same table, so th
 drift apart. Stage SLAs live there too, which is what drives the aging chips and the "past
 the stage target" counts.
 
-**Pipeline stages** are the eleven from the specification — New, Screening, Qualified,
-Submitted, Client Review, Interview Scheduled, Interview Completed, Feedback Pending,
-Selected, Offer, Joined — plus Rejected, Withdrawn and On Hold as terminal states. The
+**Pipeline stages** are rows, not constants. They ship as the eleven from the
+specification — New, Screening, Qualified, Submitted, Client Review, Interview Scheduled,
+Interview Completed, Feedback Pending, Selected, Offer, Joined — plus Rejected, Withdrawn
+and On Hold as terminal states, and an administrator can rename, reorder, retune or add to
+them in Settings.
+
+What makes that safe is that the application does not reason about stage *names*. Each
+stage carries a **phase** — sourcing, submitted, interviewing, offer, placement — and every
+rule in the codebase is written against the phase. Rename "Client Review" to "Panel Sift"
+and the funnel, the interview sync and each requirement's derived status all keep working,
+because none of them ever mentioned the name. The
 three interview-band stages are not three things a recruiter has to remember to click:
 they are recomputed from the actual interviews and scorecards whenever either changes, so
 "Feedback Pending" always means somebody genuinely owes a scorecard.
@@ -156,16 +186,21 @@ Three guarantees from the specification, implemented once in
   user to reload, rather than quietly overwriting a colleague's work.
 
 Why Postgres: SQLite served the single-writer case well, but §1 requires several
-recruiters to work at once and see each other's updates. SQLite takes one writer
-at a time; Postgres does not, and it offers `LISTEN`/`NOTIFY` for the real-time
-work still in the backlog.
+recruiters to work at once and see each other's updates. SQLite takes one writer at a
+time; Postgres does not. It has since earned its place three more times — `LISTEN`/`NOTIFY`
+carries live updates between instances, `select … for update skip locked` is the job
+queue, and a generated `tsvector` column with a GIN index is the search.
 
 ### Reads and writes
 
-Pages are server components that call synchronous query functions — better-sqlite3 is
-synchronous, and the dataset is small enough that a handful of indexed aggregates beats any
-caching layer. Mutations are server actions that validate with Zod, return
-`{ ok, message, errors }`, write an activity row, and revalidate the affected paths.
+Pages are server components that call query functions in `src/server/queries`. Filtering,
+sorting and pagination happen in SQL — the candidate list reads a page of forty rows, not
+the whole table — and a per-request memo (`server/request-cache.ts`) means several sections
+of the dashboard asking for the same list produce one query rather than four.
+
+Mutations are server actions that validate with Zod, return `{ ok, message, errors }`,
+write an activity row, revalidate the affected paths, and — because that activity row is
+also the broadcast — tell every other open browser that something changed.
 
 Business rules are enforced in the action layer, not the UI:
 
@@ -185,6 +220,33 @@ Business rules are enforced in the action layer, not the UI:
   vocabulary, so the board can flag a candidate the client will not accept.
 - Declining feedback only counts once every panelist has weighed in; the round outcome is
   then derived from the balance of recommendations rather than asked for twice.
+
+### Matching, parsing and the assistant
+
+These are the product's "AI" features, and none of them call a model. That is a decision,
+not a shortcut, and it rests on four things:
+
+- **Explainability.** §16 asks the matcher to show its reasoning. A scoring function that
+  returns seven factors, each with its own verdict and the evidence behind it, is explicable
+  by construction. A model that returns 87 can be asked to narrate afterwards, which is a
+  different and weaker claim.
+- **Regulation.** Automated tools used in hiring decisions attract NYC Local Law 144 and
+  the EU AI Act. A deterministic, inspectable, auditable function is on the right side of
+  both; a prompt is an argument with a regulator.
+- **PII.** A resume is personal data. Parsing it in-process means it is never sent anywhere,
+  which is also what makes the erasure guarantee in `server/privacy.ts` true.
+- **Accuracy.** The fields being matched are already structured — skills, years, location,
+  work authorization, rate. There is nothing here a language model would read better.
+
+The assistant works the same way. A question becomes a **closed structured query** —
+entity, filters, a bounded vocabulary — which is then executed by the same scoped query
+functions the pages call. It cannot invent a filter, reach a table it was not given, or
+return a row the asker could not have navigated to, because there is no free-form step
+between the question and the SQL for an injected instruction to attach to.
+
+`AiProvider` is a port with a local implementation, so a deployment that wants a model can
+add one in a single file. It carries an `external: boolean` the UI reads, because "this
+left the building" is something a recruiter handling someone's CV should be told.
 
 ### Charts
 
@@ -228,9 +290,14 @@ and old ones with twelve months of funnel behind them. How far a candidate can h
 capped by how long their requirement has been open — a role posted last week cannot have
 somebody at offer.
 
-Roughly: 30 people, 12 client accounts, 54 requisitions, ~1,150 candidates and submissions,
-~5,000 stage events, ~600 interviews, ~600 scorecards, ~60 offers and ~5,000 activity
-entries, with about 220 live candidates spread across all ten working stages.
+Roughly: 30 people, 12 client accounts, 54 requisitions, ~1,300 candidates, ~1,300
+submissions, ~5,000 stage events, ~700 interviews, ~700 scorecards, ~60 offers, ~1,170
+logged calls and emails, and ~5,900 activity entries — of which ~1,700 carry a structured
+field-level diff. About 230 candidates are live across the working stages.
+
+Some of it is deliberately imperfect, because several features have nothing to demonstrate
+against clean data: seven near-duplicate candidate records for the merge flow, seventeen
+candidates who have gone quiet, and five requirements already at risk of their SLA.
 
 The generator is seeded, so the same database comes out every time. Re-running it drops and
 recreates the tables **in place** rather than deleting the file, so it works while the dev
@@ -246,7 +313,8 @@ server is running (on Windows the server holds an open handle).
 | `npm run build` / `npm start` | Production build and serve |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
-| `npm test` | Vitest — permission matrix and integrity rules (64 tests) |
+| `npm test` | Vitest — 261 unit tests, no database needed |
+| `npm run test:integration` | 25 tests against real Postgres, real sessions, real actions |
 | `npm run db:up` / `db:down` | Start / stop the Postgres container |
 | `npm run db:generate` | Generate a migration from `schema.ts` |
 | `npm run db:seed` | Rebuild the database from the simulation |
@@ -260,17 +328,27 @@ override with `DATABASE_URL`.
 
 ## Notes and limitations
 
-- **Authentication is password-only.** There is no SSO, no MFA and no password-reset flow.
+Honest gaps, not a roadmap. `BACKLOG.md` tracks all 45 items and what was done for each.
+
+- **Authentication is password-only.** No SSO, no MFA, no password-reset flow.
   `src/server/auth.ts` and `src/server/session.ts` are the two files an identity provider
   would replace; nothing else reads the cookie.
-- **The settings UI for editing the permission matrix is not built yet.** The matrix is
-  stored in the database and seeded from code, so it is configurable by an administrator
-  with database access but not yet through the app.
-- **Test coverage is narrow.** The permission matrix and the integrity rules are covered;
-  the action-layer business rules (offer state machine, hire cascade) are not yet. See
-  `BACKLOG.md` item 5.1.
-- **Soft delete has no UI yet.** The columns, predicates and helpers exist and reads honour
-  them, but no screen offers "delete" or "restore" — nothing in the app deletes records
-  today.
-- Email, calendar and job-board integrations are out of scope; interviews record a meeting
-  link rather than creating a real calendar event.
+- **Single tenant.** Every row belongs to one organisation. Multi-tenancy is the one
+  backlog item deliberately left undone — it is an XL change to every query in the system
+  and only worth making if multi-company is genuinely in scope.
+- **No external integrations are configured.** Calendar, email and job boards exist as
+  ports with no-op defaults that decline honestly rather than pretending to send. Adding a
+  provider is one file; until then Settings says plainly that nothing is connected.
+- **Encryption at rest is a deployment control**, not an application one, and deliberately
+  so: encrypting these columns in the app would put the key beside the data and break every
+  search that makes the product work. It belongs to the volume or the managed instance.
+- **The job worker runs in-process**, started from `instrumentation.ts`. That is the right
+  shape for one Node process serving the app; a separate worker process is a better answer
+  at a scale this is not at, and moving to one changes `server/jobs/worker.ts` and nothing
+  else. `JOB_WORKER=off` disables it per instance.
+- **Soft delete has no UI.** The columns, predicates and helpers exist and every read
+  honours them, but no screen offers "delete" or "restore". Erasure — which is a different
+  operation, and irreversible — does have one, on the candidate record.
+- **Search stops matching mid-word.** `like '%gine%'` used to find "Engineer"; full-text
+  does not. In exchange it is stemmed, prefix-matched on the word being typed, ranked, and
+  roughly 3.5× faster at 200,000 rows.
