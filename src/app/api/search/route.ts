@@ -35,7 +35,7 @@ export async function GET(request: Request) {
     });
   }
 
-  for (const c of (await listCandidates({ q: term, sort: "rating" })).slice(0, 6)) {
+  for (const c of (await listCandidates({ q: term, sort: "rating", limit: 6 })).rows) {
     hits.push({
       id: c.id,
       kind: "candidate",

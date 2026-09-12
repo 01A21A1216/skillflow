@@ -5,8 +5,8 @@ import {
   activePipelineCount,
   openOfferCount,
   openRequisitionCount,
+  weekInterviewCount,
 } from "@/server/queries/dashboard";
-import { listInterviews } from "@/server/queries/interviews";
 import { loadPipeline } from "@/server/pipeline";
 import { PipelineProvider } from "@/components/domain/pipeline-context";
 import { inbox, unreadCount, NOTIFICATION_TYPES, type NotificationType } from "@/server/notify";
@@ -20,11 +20,20 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const actor = await requireUser();
   const granted = permissionSet(actor);
 
+  // Four `count(*)` queries, in parallel. They are badges on every page, so
+  // both halves of that matter: they must not each build a list to measure it,
+  // and they must not wait for each other.
+  const [requisitions, pipelineCount, interviewsThisWeek, offers] = await Promise.all([
+    openRequisitionCount(actor),
+    activePipelineCount(actor),
+    weekInterviewCount(actor),
+    openOfferCount(actor),
+  ]);
   const counts = {
-    requisitions: await openRequisitionCount(actor),
-    pipeline: await activePipelineCount(actor),
-    interviews: (await listInterviews({ window: "week" }, actor)).length,
-    offers: await openOfferCount(actor),
+    requisitions,
+    pipeline: pipelineCount,
+    interviews: interviewsThisWeek,
+    offers,
   };
 
   // Published once here rather than fetched by each board, picker and badge.

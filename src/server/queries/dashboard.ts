@@ -3,15 +3,30 @@ import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { activities, candidates, communications, submissions, users } from "@/db/schema";
+import {
+  activities,
+  candidates,
+  communications,
+  interviews,
+  offers,
+  requisitions,
+  submissions,
+  users,
+} from "@/db/schema";
 import type { User } from "@/db/schema";
-import { can, visibleRequisitionIds } from "@/server/authz";
+import {
+  can,
+  interviewScope,
+  requisitionScope,
+  submissionScope,
+  visibleRequisitionIds,
+} from "@/server/authz";
 import { FEEDBACK_SLA_HOURS, type Stage } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
 import { daysBetween, pct } from "@/lib/utils";
 import { funnel, monthlyTrend, timeToHire } from "./analytics";
-import { awaitingFeedback, listInterviews } from "./interviews";
-import { listOffers } from "./offers";
+import { awaitingFeedback, listInterviews, startOfDay } from "./interviews";
+import { listOffers, OPEN_OFFER_STATUSES } from "./offers";
 import { pipelineCards, type PipelineCard } from "./pipeline";
 import { listRequisitions, requisitionHealth, type RequisitionRow } from "./requisitions";
 
@@ -622,14 +637,84 @@ export async function teamRoster() {
   return (await db.select().from(users).orderBy(users.name));
 }
 
+/* ------------------------------------------------------------------ *
+ * Sidebar badge counts
+ *
+ * These four run on *every* authenticated page, because the sidebar is in the
+ * layout. They used to be `(await listX(...)).length` — which is correct, and
+ * was costing a full list build each: every requisition with its joins and
+ * per-stage counts, every live submission with its candidate, requirement,
+ * client, owner, interviews and offers, every open offer with six joins, and
+ * every interview this week with its panel and feedback. Four lists built to
+ * produce four integers, before a single byte of the actual page.
+ *
+ * They are now `count(*)` over the same predicates. "The same" is the part
+ * that matters: a badge that disagreed with the page it links to would be a
+ * worse bug than a slow one, so each count reuses the scope helper and the
+ * status predicate the list itself applies, rather than restating the rule.
+ * ------------------------------------------------------------------ */
+
+async function countOf(query: Promise<{ n: number }[]>) {
+  return (await query)[0]?.n ?? 0;
+}
+
+const COUNT = sql<number>`count(*)::int`;
+
+/** Matches `listRequisitions({ status: "active" })`. */
 export async function openRequisitionCount(actor?: User) {
-  return (await listRequisitions({ status: "active" }, actor)).length;
+  const conditions = [inArray(requisitions.status, ["open", "on_hold", "draft"])];
+  if (actor) {
+    const scope = await requisitionScope(actor);
+    if (scope) conditions.push(scope);
+  }
+  return countOf(
+    db.select({ n: COUNT }).from(requisitions).where(and(...conditions)),
+  );
 }
 
+/** Matches `pipelineCards({})`, whose default is active submissions in live stages. */
 export async function activePipelineCount(actor?: User) {
-  return (await pipelineCards({}, actor)).length;
+  const pipeline = await loadPipeline();
+  const conditions = [
+    eq(submissions.status, "active"),
+    inArray(submissions.stage, pipeline.active),
+  ];
+  if (actor) {
+    const scope = await submissionScope(actor);
+    if (scope) conditions.push(scope);
+  }
+  return countOf(db.select({ n: COUNT }).from(submissions).where(and(...conditions)));
 }
 
+/** Matches `listOffers({ status: "open" })`. */
 export async function openOfferCount(actor?: User) {
-  return (await listOffers({ status: "open" }, actor)).length;
+  const conditions = [inArray(offers.status, OPEN_OFFER_STATUSES)];
+  if (actor) {
+    const visible = await visibleRequisitionIds(actor);
+    if (visible !== null) {
+      if (!visible.length) return 0;
+      conditions.push(inArray(submissions.requisitionId, visible));
+    }
+  }
+  return countOf(
+    db
+      .select({ n: COUNT })
+      .from(offers)
+      .innerJoin(submissions, eq(submissions.id, offers.submissionId))
+      .where(and(...conditions)),
+  );
+}
+
+/** Matches `listInterviews({ window: "week" })`. */
+export async function weekInterviewCount(actor?: User) {
+  const start = startOfDay();
+  const conditions = [
+    gte(interviews.scheduledAt, start),
+    lte(interviews.scheduledAt, new Date(start.getTime() + 7 * DAY)),
+  ];
+  if (actor) {
+    const scope = await interviewScope(actor);
+    if (scope) conditions.push(scope);
+  }
+  return countOf(db.select({ n: COUNT }).from(interviews).where(and(...conditions)));
 }

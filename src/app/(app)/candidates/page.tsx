@@ -62,13 +62,16 @@ export default async function CandidatesPage({
   };
 
   const actor = await requirePermission("candidate.view.all");
-  const all = await listCandidates(filters, actor);
   const page = Math.max(1, Number(get("page") ?? 1) || 1);
-  const totalPages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
-  const rows = all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // One page of rows, and the two totals the header reports — all from SQL.
+  const { rows, total, inPlay } = await listCandidates(
+    { ...filters, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE },
+    actor,
+  );
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const facets = await candidateFacets();
-  const inPlay = all.filter((c) => c.activeSubmissions > 0).length;
 
   const qs = (next: number) => {
     const sp = new URLSearchParams();
@@ -84,7 +87,7 @@ export default async function CandidatesPage({
     <>
       <PageHeader
         title="Candidates"
-        description={`${pluralize(all.length, "person")} matching · ${inPlay} currently in a live pipeline.`}
+        description={`${pluralize(total, "person")} matching · ${inPlay} currently in a live pipeline.`}
         actions={
           can(actor, "candidate.create") ? (
             <NewCandidateButton
@@ -255,8 +258,8 @@ export default async function CandidatesPage({
                 aria-label="Candidate pagination"
               >
                 <p className="text-[12.5px] text-content-subtle tabular-nums">
-                  Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, all.length)} of{" "}
-                  {all.length}
+                  Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of{" "}
+                  {total}
                 </p>
                 <div className="flex items-center gap-2">
                   {page > 1 ? (

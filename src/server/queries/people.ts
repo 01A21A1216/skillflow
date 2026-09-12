@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cache } from "react";
+
 import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -19,9 +21,13 @@ import {
 import { average, pct } from "@/lib/utils";
 import { recruiterPerformance } from "./analytics";
 
-export async function listUsers() {
-  return (await db.select().from(users).orderBy(asc(users.name)));
-}
+/**
+ * Everyone, by name.
+ *
+ * Memoised per request: a page that renders an owner picker, an assignee
+ * picker and a panel picker asked for the same dozen rows three times.
+ */
+export const listUsers = cache(async () => db.select().from(users).orderBy(asc(users.name)));
 
 export async function recruiterOptions() {
   return (await db
@@ -161,7 +167,7 @@ export async function teamOverview(): Promise<TeamMember[]> {
   });
 }
 
-export async function getTeamMember(userId: string) {
+async function loadTeamMember(userId: string) {
   const user = (await db.select().from(users).where(eq(users.id, userId)))[0];
   if (!user) return null;
 
@@ -204,7 +210,7 @@ export async function getTeamMember(userId: string) {
   return { user, member, requisitions: reqs, managed, interviews: panelHistory };
 }
 
-export async function getClient(clientId: string) {
+async function loadClient(clientId: string) {
   const client = (await db.select().from(clients).where(eq(clients.id, clientId)))[0];
   if (!client) return null;
 
@@ -246,3 +252,19 @@ export async function permissionMatrixView() {
     granted: new Set(grants.map((g) => `${g.roleKey}|${g.permissionKey}`)),
   };
 }
+
+/**
+ * Per-request memoisation.
+ *
+ * A detail page loads its record twice: once in `generateMetadata`, to put the
+ * person's name in the tab title, and once in the page body. Next runs both,
+ * and without this the second call repeats every query the first one made —
+ * on the team page that was thirty-odd statements, including the whole
+ * recruiter-performance aggregate, to produce a string.
+ *
+ * React's `cache` scopes the memo to a single request, so it is not a cache in
+ * the stale-data sense: two people looking at the same record still get their
+ * own reads, and a mutation is visible on the next request.
+ */
+export const getTeamMember = cache(loadTeamMember);
+export const getClient = cache(loadClient);

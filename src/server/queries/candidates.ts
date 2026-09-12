@@ -1,5 +1,9 @@
 import "server-only";
 
+import { once, queryKey } from "@/server/request-cache";
+
+import { cache } from "react";
+
 import { and, asc, desc, eq, gte, inArray, isNull, like, lte, or, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -32,6 +36,8 @@ export interface CandidateFilters {
   seniority?: string;
   owner?: string;
   skill?: string;
+  /** Additional skills, all of which must be held. */
+  skills?: string[];
   minExp?: string;
   maxExp?: string;
   auth?: string;
@@ -39,6 +45,9 @@ export interface CandidateFilters {
   location?: string;
   inPipeline?: string;
   sort?: string;
+  /** Page size. Defaults to 40; the list is never returned unbounded. */
+  limit?: number;
+  offset?: number;
 }
 
 export interface CandidateRow {
@@ -76,52 +85,72 @@ export interface CandidateRow {
 
 
 /**
- * How far through the pipeline a stage is, for "furthest stage reached".
+ * Live and total submissions per candidate, and how far they ever reached.
  *
- * Derived from the configured pipeline rather than hard-coded: this was a
- * frozen list of the original six stage names and had been silently wrong
- * since they were renamed — every candidate's furthest stage read as null.
+ * A grouped subquery rather than a second round trip, so the counts can be
+ * filtered, sorted and paginated on in SQL. `furthest` is the highest stage
+ * rank the candidate ever reached; the ranks come from the configured
+ * pipeline, passed in as a `case` expression because they are rows, not
+ * constants.
  */
-async function stageRank(): Promise<Record<string, number>> {
+async function submissionStats() {
   const pipeline = await loadPipeline();
-  const rank: Record<string, number> = {};
-  pipeline.order.forEach((stage, i) => {
-    rank[stage] = i;
-  });
-  for (const t of pipeline.terminal) rank[t.key] = -1;
-  return rank;
-}
 
-async function submissionSummary() {
-  const STAGE_RANK = await stageRank();
-  const rows = (await db
+  // rank(stage) as SQL. Terminal stages rank -1: being rejected is not
+  // progress, and a candidate whose only movement was a rejection has no
+  // furthest stage rather than a flattering one.
+  const rankCases = pipeline.order.map(
+    (stage, i) => sql`when ${submissions.stage} = ${stage} then ${i}`,
+  );
+  const rank = sql`(case ${sql.join(rankCases, sql` `)} else -1 end)`;
+
+  const activeStages = pipeline.active;
+
+  return db
     .select({
       candidateId: submissions.candidateId,
-      stage: submissions.stage,
-      status: submissions.status,
-      count: sql<number>`count(*)::int`,
+      active: sql<number>`count(*) filter (
+        where ${submissions.status} = 'active'
+          and ${submissions.stage} in ${activeStages}
+      )::int`.as("active_count"),
+      total: sql<number>`count(*)::int`.as("total_count"),
+      furthestRank: sql<number>`max(${rank})::int`.as("furthest_rank"),
     })
     .from(submissions)
-    .groupBy(submissions.candidateId, submissions.stage, submissions.status)
-    );
-
-  const pipeline = await loadPipeline();
-  const activeSet = new Set(pipeline.active);
-  const map = new Map<string, { active: number; total: number; furthest: string | null }>();
-  for (const r of rows) {
-    const entry = map.get(r.candidateId) ?? { active: 0, total: 0, furthest: null };
-    entry.total += r.count;
-    if (r.status === "active" && activeSet.has(r.stage)) entry.active += r.count;
-    const rank = STAGE_RANK[r.stage] ?? -1;
-    if (rank >= 0 && (entry.furthest === null || rank > (STAGE_RANK[entry.furthest] ?? -1))) {
-      entry.furthest = r.stage;
-    }
-    map.set(r.candidateId, entry);
-  }
-  return map;
+    .groupBy(submissions.candidateId)
+    .as("stats");
 }
 
-export async function listCandidates(filters: CandidateFilters = {}, actor?: User): Promise<CandidateRow[]> {
+/** One page of candidates, plus the totals the header reports. */
+export interface CandidatePage {
+  rows: CandidateRow[];
+  /** Everyone matching the filters, not just this page. */
+  total: number;
+  /** How many of those are in a live pipeline. */
+  inPlay: number;
+}
+
+/**
+ * The candidate list (§7).
+ *
+ * Filtering, sorting and pagination all happen in SQL. That is worth stating
+ * because it used to not: the page read all 1,306 candidates with their owner,
+ * grouped every submission in the database to count them, sorted the result in
+ * JavaScript and then threw away all but forty rows. It was fast enough at
+ * this size and would not have been at ten times it, and the fix is the same
+ * amount of code.
+ *
+ * The submission counts are a grouped subquery joined in rather than a second
+ * round trip, because two of the sorts and one of the filters are expressed in
+ * terms of them — "most active" cannot be ordered in SQL if the number it
+ * orders by is computed afterwards.
+ */
+async function loadCandidateList(
+  filters: CandidateFilters = {},
+  actor?: User,
+): Promise<CandidatePage> {
+  const pipeline = await loadPipeline();
+  const stats = await submissionStats();
   const conditions = [];
 
   if (filters.q) {
@@ -144,8 +173,13 @@ export async function listCandidates(filters: CandidateFilters = {}, actor?: Use
   if (filters.owner && filters.owner !== "all") conditions.push(eq(candidates.ownerId, filters.owner));
   if (filters.auth && filters.auth !== "all")
     conditions.push(eq(candidates.workAuthorization, filters.auth));
-  if (filters.skill && filters.skill !== "all")
-    conditions.push(like(sql`lower(${candidates.skills}::text)`, `%${filters.skill.toLowerCase()}%`));
+  // One named skill, or several. Each is a separate `and`, because a question
+  // that names three skills means all three — a candidate who has one of them
+  // is not an answer to it.
+  for (const skill of [filters.skill, ...(filters.skills ?? [])]) {
+    if (!skill || skill === "all") continue;
+    conditions.push(like(sql`lower(${candidates.skills}::text)`, `%${skill.toLowerCase()}%`));
+  }
   if (filters.availability && filters.availability !== "all")
     conditions.push(eq(candidates.availability, filters.availability));
   if (filters.location && filters.location !== "all")
@@ -153,72 +187,107 @@ export async function listCandidates(filters: CandidateFilters = {}, actor?: Use
   if (filters.minExp) conditions.push(gte(candidates.yearsExperience, Number(filters.minExp)));
   if (filters.maxExp) conditions.push(lte(candidates.yearsExperience, Number(filters.maxExp)));
 
-  const rows = (await db
-    .select({ candidate: candidates, ownerName: users.name })
-    .from(candidates)
-    .innerJoin(users, eq(users.id, candidates.ownerId))
-    .where(conditions.length ? and(...conditions) : undefined)
-    );
+  // A candidate with no submissions has no row in the subquery, so the live
+  // count is null rather than zero — coalesced here so "on the bench" means
+  // "nobody, ever" and "nobody, currently" alike.
+  const activeCount = sql<number>`coalesce(${stats.active}, 0)`;
+  if (filters.inPipeline === "yes") conditions.push(sql`${activeCount} > 0`);
+  if (filters.inPipeline === "no") conditions.push(sql`${activeCount} = 0`);
 
-  const summary = await submissionSummary();
+  const where = conditions.length ? and(...conditions) : undefined;
 
-  let result: CandidateRow[] = rows.map(({ candidate: c, ownerName }) => {
-    const sum = summary.get(c.id) ?? { active: 0, total: 0, furthest: null };
-    return {
-      id: c.id,
-      firstName: c.firstName,
-      lastName: c.lastName,
-      email: c.email,
-      phone: c.phone,
-      location: c.location,
-      currentTitle: c.currentTitle,
-      currentCompany: c.currentCompany,
-      yearsExperience: c.yearsExperience,
-      seniority: c.seniority,
-      skills: c.skills ?? [],
-      primaryTechnology: c.primaryTechnology,
-      availability: c.availability,
-      expectedRate: c.expectedRate,
-      tags: c.tags ?? [],
-      source: c.source,
-      status: c.status,
-      rating: c.rating,
-      expectedSalary: c.expectedSalary,
-      currency: c.currency,
-      workAuthorization: c.workAuthorization,
-      noticePeriodDays: c.noticePeriodDays,
-      willingToRelocate: c.willingToRelocate,
-      ownerId: c.ownerId,
-      ownerName,
-      createdAt: c.createdAt,
-      lastContactedAt: c.lastContactedAt,
-      activeSubmissions: sum.active,
-      totalSubmissions: sum.total,
-      furthestStage: sum.furthest,
-    };
-  });
+  const ORDER: Record<string, ReturnType<typeof desc>[]> = {
+    recent: [desc(candidates.createdAt)],
+    name: [asc(candidates.lastName), asc(candidates.firstName)],
+    rating: [desc(candidates.rating), desc(candidates.yearsExperience)],
+    experience: [desc(candidates.yearsExperience)],
+    pipeline: [desc(activeCount)],
+    // Nulls last: never contacted is not the same as contacted longest ago,
+    // and sorting by "recently contacted" should not lead with people nobody
+    // has ever called.
+    contacted: [sql`${candidates.lastContactedAt} desc nulls last`],
+  };
+  const orderBy = ORDER[filters.sort ?? "recent"] ?? ORDER.recent!;
+
+  const limit = filters.limit ?? 40;
+  const offset = filters.offset ?? 0;
+
+  const [rows, totals] = await Promise.all([
+    db
+      .select({
+        candidate: candidates,
+        ownerName: users.name,
+        active: activeCount,
+        total: sql<number>`coalesce(${stats.total}, 0)`,
+        furthestRank: stats.furthestRank,
+      })
+      .from(candidates)
+      .innerJoin(users, eq(users.id, candidates.ownerId))
+      .leftJoin(stats, eq(stats.candidateId, candidates.id))
+      .where(where)
+      // Tie-break on the primary key. Without it two candidates with the same
+      // rating can swap places between page 1 and page 2, which shows one
+      // twice and hides the other entirely.
+      .orderBy(...orderBy, asc(candidates.id))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({
+        total: sql<number>`count(*)::int`,
+        inPlay: sql<number>`count(*) filter (where ${activeCount} > 0)::int`,
+      })
+      .from(candidates)
+      .leftJoin(stats, eq(stats.candidateId, candidates.id))
+      .where(where),
+  ]);
+
+  const byRank = pipeline.order;
+
+  let result: CandidateRow[] = rows.map(({ candidate: c, ownerName, active, total, furthestRank }) => ({
+    id: c.id,
+    firstName: c.firstName,
+    lastName: c.lastName,
+    email: c.email,
+    phone: c.phone,
+    location: c.location,
+    currentTitle: c.currentTitle,
+    currentCompany: c.currentCompany,
+    yearsExperience: c.yearsExperience,
+    seniority: c.seniority,
+    skills: c.skills ?? [],
+    primaryTechnology: c.primaryTechnology,
+    availability: c.availability,
+    expectedRate: c.expectedRate,
+    tags: c.tags ?? [],
+    source: c.source,
+    status: c.status,
+    rating: c.rating,
+    expectedSalary: c.expectedSalary,
+    currency: c.currency,
+    workAuthorization: c.workAuthorization,
+    noticePeriodDays: c.noticePeriodDays,
+    willingToRelocate: c.willingToRelocate,
+    ownerId: c.ownerId,
+    ownerName,
+    createdAt: c.createdAt,
+    lastContactedAt: c.lastContactedAt,
+    activeSubmissions: active,
+    totalSubmissions: total,
+    furthestStage: furthestRank !== null && furthestRank >= 0 ? (byRank[furthestRank] ?? null) : null,
+  }));
 
   // Contact details and compensation are stripped server-side for actors
   // without `candidate.pii`, so the values never reach the browser at all.
   if (actor) result = result.map((c) => redactCandidate(actor, c));
 
-  if (filters.inPipeline === "yes") result = result.filter((c) => c.activeSubmissions > 0);
-  if (filters.inPipeline === "no") result = result.filter((c) => c.activeSubmissions === 0);
-
-  const sorter: Record<string, (a: CandidateRow, b: CandidateRow) => number> = {
-    recent: (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-    name: (a, b) => `${a.lastName}${a.firstName}`.localeCompare(`${b.lastName}${b.firstName}`),
-    rating: (a, b) => b.rating - a.rating || b.yearsExperience - a.yearsExperience,
-    experience: (a, b) => b.yearsExperience - a.yearsExperience,
-    pipeline: (a, b) => b.activeSubmissions - a.activeSubmissions,
-    contacted: (a, b) => (b.lastContactedAt?.getTime() ?? 0) - (a.lastContactedAt?.getTime() ?? 0),
+  return {
+    rows: result,
+    total: totals[0]?.total ?? 0,
+    inPlay: totals[0]?.inPlay ?? 0,
   };
-  result.sort(sorter[filters.sort ?? "recent"] ?? sorter.recent!);
-
-  return result;
 }
 
-export async function getCandidate(candidateId: string, actor?: User) {
+async function loadCandidate(candidateId: string, actor?: User) {
   const raw = (await db.select().from(candidates).where(eq(candidates.id, candidateId)))[0];
   if (!raw) return null;
   const candidate = actor ? redactCandidate(actor, raw) : raw;
@@ -379,20 +448,50 @@ export async function candidateFacets() {
     .orderBy(asc(users.name))
     );
 
-  // Skill facet is derived from the JSON arrays actually present on candidates.
-  const skillRows = (await db.select({ skills: candidates.skills }).from(candidates));
-  const tally = new Map<string, number>();
-  for (const r of skillRows) {
-    for (const s of r.skills ?? []) tally.set(s, (tally.get(s) ?? 0) + 1);
-  }
-  const skills = [...tally.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([name, count]) => ({ name, count }));
+  /*
+   * The skill facet, tallied by Postgres.
+   *
+   * Derived from the arrays actually on candidates rather than from a fixed
+   * list, so a skill nobody has does not appear in the filter and a new one
+   * appears the moment somebody is given it. `jsonb_array_elements_text`
+   * unnests the array so this is an ordinary group-by, rather than reading
+   * every candidate's skills into the application to count them there.
+   */
+  const skillRows = await db.execute<{ name: string; count: number }>(sql`
+    select skill as name, count(*)::int as count
+    from ${candidates}, jsonb_array_elements_text(${candidates.skills}) as skill
+    group by skill
+    order by count(*) desc, lower(skill) asc
+  `);
+  const skills = skillRows.rows.map((r) => ({ name: r.name, count: Number(r.count) }));
 
   return { owners, skills };
 }
 
 /** Candidates not currently in any live pipeline — the re-engagement list. */
 export async function benchCandidates(limit = 8) {
-  return (await listCandidates({ inPipeline: "no", status: "active", sort: "rating" })).slice(0, limit);
+  return (await listCandidates({ inPipeline: "no", status: "active", sort: "rating", limit })).rows;
+}
+
+/**
+ * Per-request memoisation.
+ *
+ * A detail page loads its record twice: once in `generateMetadata`, to put the
+ * person's name in the tab title, and once in the page body. Next runs both,
+ * and without this the second call repeats every query the first one made —
+ * on the team page that was thirty-odd statements, including the whole
+ * recruiter-performance aggregate, to produce a string.
+ *
+ * React's `cache` scopes the memo to a single request, so it is not a cache in
+ * the stale-data sense: two people looking at the same record still get their
+ * own reads, and a mutation is visible on the next request.
+ */
+export const getCandidate = cache(loadCandidate);
+
+/** listCandidates, memoised for the request — see `server/request-cache.ts`. */
+export function listCandidates(
+  filters: CandidateFilters = {},
+  actor?: User,
+): Promise<CandidatePage> {
+  return once(queryKey("candidates", filters, actor?.id), () => loadCandidateList(filters, actor));
 }

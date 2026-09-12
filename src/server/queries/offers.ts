@@ -1,5 +1,7 @@
 import "server-only";
 
+import { once, queryKey } from "@/server/request-cache";
+
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -53,9 +55,17 @@ export interface OfferRow {
   isOpen: boolean;
 }
 
-const OPEN_STATUSES = ["draft", "pending_approval", "approved", "extended"];
+/**
+ * An offer that is still in play.
+ *
+ * Exported because the sidebar badge counts the same set with `count(*)`
+ * rather than by building this list; sharing the definition is what keeps the
+ * badge and the page from drifting apart.
+ */
+export const OPEN_OFFER_STATUSES = ["draft", "pending_approval", "approved", "extended"];
+const OPEN_STATUSES = OPEN_OFFER_STATUSES;
 
-export async function listOffers(filters: OfferFilters = {}, actor?: User): Promise<OfferRow[]> {
+async function loadOffers(filters: OfferFilters = {}, actor?: User): Promise<OfferRow[]> {
   const approver = alias(users, "approver");
   const conditions = [];
 
@@ -157,10 +167,6 @@ export async function listOffers(filters: OfferFilters = {}, actor?: User): Prom
   return result;
 }
 
-export async function getOffer(offerId: string) {
-  return (await listOffers()).find((o) => o.id === offerId) ?? null;
-}
-
 /** Headline numbers for the offers page. */
 export async function offerStats(actor?: User) {
   const all = await listOffers({}, actor);
@@ -230,4 +236,12 @@ export async function offerReadySubmissions() {
       minSalary: r.minSalary,
       maxSalary: r.maxSalary,
     }));
+}
+
+/** listOffers, memoised for the request — see `server/request-cache.ts`. */
+export function listOffers(
+  filters: OfferFilters = {},
+  actor?: User,
+): Promise<OfferRow[]> {
+  return once(queryKey("offers", filters, actor?.id), () => loadOffers(filters, actor));
 }

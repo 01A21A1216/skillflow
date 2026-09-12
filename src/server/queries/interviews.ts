@@ -1,5 +1,7 @@
 import "server-only";
 
+import { once, queryKey } from "@/server/request-cache";
+
 import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -70,13 +72,14 @@ export interface InterviewRow {
 
 const DAY = 86_400_000;
 
-function startOfDay(d = new Date()) {
+/** Exported so the sidebar's `count(*)` uses the same day boundary the list does. */
+export function startOfDay(d = new Date()) {
   const copy = new Date(d);
   copy.setHours(0, 0, 0, 0);
   return copy;
 }
 
-export async function listInterviews(
+async function loadInterviews(
   filters: InterviewFilters = {},
   actor?: User,
 ): Promise<InterviewRow[]> {
@@ -324,4 +327,12 @@ export async function interviewerOptions() {
     .where(inArray(users.role, ["interviewer", "hiring_manager", "recruiter", "recruitment_manager", "super_admin"]))
     .orderBy(asc(users.name))
     );
+}
+
+/** listInterviews, memoised for the request — see `server/request-cache.ts`. */
+export function listInterviews(
+  filters: InterviewFilters = {},
+  actor?: User,
+): Promise<InterviewRow[]> {
+  return once(queryKey("interviews", filters, actor?.id), () => loadInterviews(filters, actor));
 }

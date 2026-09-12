@@ -153,28 +153,20 @@ async function candidateAnswer(
   // Everything else is the ordinary candidate list, filtered. Scope, PII
   // redaction and soft-delete all come along because it is the same function
   // the candidates page calls.
-  const all = await listCandidates(
+  const { rows, total } = await listCandidates(
     {
       // A named role becomes a title search; a named skill becomes a skill
       // filter. Conflating them finds nobody and says so confidently.
       q: q.titles[0] ?? q.text ?? undefined,
-      skill: q.skills[0],
+      // Every skill the question named, all of which must be held.
+      skills: q.skills,
       availability: q.availability ?? undefined,
       minExp: q.minExperience !== null ? String(q.minExperience) : undefined,
       location: q.location ?? undefined,
+      limit: 20,
     },
     actor,
   );
-
-  // Additional named skills are applied here rather than in SQL, because the
-  // list filter takes one and the question may name three.
-  const extra = q.skills.slice(1).map(normaliseName);
-  const rows = extra.length
-    ? all.filter((c) => {
-        const held = new Set(c.skills.map(normaliseName));
-        return extra.every((s) => held.has(s));
-      })
-    : all;
 
   const params = new URLSearchParams();
   if (q.titles[0] ?? q.text) params.set("q", q.titles[0] ?? q.text);
@@ -184,15 +176,15 @@ async function candidateAnswer(
   return {
     question,
     interpretation: q.interpretation,
-    headline: `${rows.length} ${rows.length === 1 ? "candidate" : "candidates"}`,
-    rows: rows.slice(0, 20).map((c) => ({
+    headline: `${total} ${total === 1 ? "candidate" : "candidates"}`,
+    rows: rows.map((c) => ({
       id: c.id,
       title: `${c.firstName} ${c.lastName}`,
       subtitle: `${c.currentTitle} · ${c.currentCompany} · ${c.location}`,
       meta: `${c.yearsExperience} yrs · ${c.primaryTechnology || c.skills[0] || ""}`,
       href: `/candidates/${c.id}`,
     })),
-    total: rows.length,
+    total,
     seeAllHref: `/candidates${params.size ? `?${params}` : ""}`,
     fallback: q.fallback,
   };

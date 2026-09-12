@@ -1,5 +1,7 @@
 import "server-only";
 
+import { once, queryKey } from "@/server/request-cache";
+
 import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -71,7 +73,7 @@ export interface PipelineCard {
 }
 
 /** Every live card in the funnel, ready to be bucketed by stage. */
-export async function pipelineCards(filters: PipelineFilters = {}, actor?: User): Promise<PipelineCard[]> {
+async function loadPipelineCards(filters: PipelineFilters = {}, actor?: User): Promise<PipelineCard[]> {
   const pipeline = await loadPipeline();
   const status = filters.status ?? "active";
   const conditions =
@@ -319,4 +321,12 @@ export async function openRequisitionOptions(excludeCandidateId?: string) {
     .orderBy(desc(requisitions.openedAt))
     )
     .filter((r) => !taken.has(r.id));
+}
+
+/** pipelineCards, memoised for the request — see `server/request-cache.ts`. */
+export function pipelineCards(
+  filters: PipelineFilters = {},
+  actor?: User,
+): Promise<PipelineCard[]> {
+  return once(queryKey("pipeline", filters, actor?.id), () => loadPipelineCards(filters, actor));
 }

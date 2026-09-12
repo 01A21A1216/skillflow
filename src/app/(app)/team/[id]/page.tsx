@@ -54,7 +54,19 @@ export default async function TeamMemberPage({
   if (!detail) notFound();
 
   const { user, member, requisitions, managed, interviews } = detail;
-  const summaries = new Map((await listRequisitions({ status: "all" }, actor)).map((r) => [r.id, r]));
+  // Only the requirements this person is on, rather than every one in the
+  // business to look up a dozen.
+  const summaries = new Map(
+    (
+      await listRequisitions(
+        {
+          ids: [...requisitions, ...managed].map((r) => r.requisition.id),
+          status: "all",
+        },
+        actor,
+      )
+    ).map((r) => [r.id, r]),
+  );
 
   const owned = requisitions.filter((r) =>
     ["open", "on_hold", "draft"].includes(r.requisition.status),

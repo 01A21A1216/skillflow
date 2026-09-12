@@ -1,5 +1,9 @@
 import "server-only";
 
+import { once, queryKey } from "@/server/request-cache";
+
+import { cache } from "react";
+
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
@@ -31,6 +35,15 @@ import { loadPipeline } from "@/server/pipeline";
 import { listAttachments } from "@/server/queries/attachments";
 
 export interface RequisitionFilters {
+  /**
+   * Only these requirements.
+   *
+   * For the callers that want the derived row — progress, health, stage
+   * counts — for a handful of known ids, rather than for all of them. It is
+   * still the same function and the same scope check; it just stops reading
+   * five hundred rows to use three.
+   */
+  ids?: string[];
   q?: string;
   status?: string;
   priority?: string;
@@ -95,10 +108,14 @@ export interface RequisitionRow {
 const DERIVED_STATUSES: string[] = ["active_sourcing", "candidate_submitted", "interviewing", "offer"];
 
 /**
- * One pass over submissions, grouped by requisition. Small enough dataset
- * that a single aggregate beats N per-row lookups.
+ * One pass over submissions, grouped by requisition — a single aggregate
+ * rather than N per-row lookups.
+ *
+ * Narrowed to the requirements actually being listed when there are few of
+ * them, so asking for one requirement's row does not group every submission
+ * in the database to fill in its stage counts.
  */
-async function pipelineCounts() {
+async function pipelineCounts(only?: string[]) {
   const rows = (await db
     .select({
       requisitionId: submissions.requisitionId,
@@ -107,6 +124,7 @@ async function pipelineCounts() {
       count: sql<number>`count(*)::int`,
     })
     .from(submissions)
+    .where(only?.length ? inArray(submissions.requisitionId, only) : undefined)
     .groupBy(submissions.requisitionId, submissions.stage, submissions.status)
     );
 
@@ -136,7 +154,7 @@ async function pipelineCounts() {
   return map;
 }
 
-export async function listRequisitions(
+async function loadRequisitions(
   filters: RequisitionFilters = {},
   actor?: User,
 ): Promise<RequisitionRow[]> {
@@ -148,6 +166,11 @@ export async function listRequisitions(
   if (actor) {
     const scope = await requisitionScope(actor);
     if (scope) conditions.push(scope);
+  }
+
+  if (filters.ids) {
+    if (!filters.ids.length) return [];
+    conditions.push(inArray(requisitions.id, filters.ids));
   }
 
   if (filters.q) {
@@ -205,7 +228,7 @@ export async function listRequisitions(
     .where(conditions.length ? and(...conditions) : undefined)
     );
 
-  const counts = await pipelineCounts();
+  const counts = await pipelineCounts(rows.map((r) => r.req.id));
 
   let result: RequisitionRow[] = rows.map(({ req, clientName, clientTier, recruiterName, hiringManagerName }) => {
     const c = counts.get(req.id) ?? {
@@ -340,7 +363,7 @@ export function requisitionHealth(r: RequisitionRow): Health {
   };
 }
 
-export async function getRequisition(reqId: string, actor?: User) {
+async function loadRequisition(reqId: string, actor?: User) {
   if (actor) {
     const visible = await visibleRequisitionIds(actor);
     if (visible !== null && !visible.includes(reqId)) return null;
@@ -486,4 +509,27 @@ export async function stageBreakdownForRequisitions(ids: string[]) {
     map.set(r.requisitionId, entry);
   }
   return map as Map<string, Record<Stage, number>>;
+}
+
+/**
+ * Per-request memoisation.
+ *
+ * A detail page loads its record twice: once in `generateMetadata`, to put the
+ * person's name in the tab title, and once in the page body. Next runs both,
+ * and without this the second call repeats every query the first one made —
+ * on the team page that was thirty-odd statements, including the whole
+ * recruiter-performance aggregate, to produce a string.
+ *
+ * React's `cache` scopes the memo to a single request, so it is not a cache in
+ * the stale-data sense: two people looking at the same record still get their
+ * own reads, and a mutation is visible on the next request.
+ */
+export const getRequisition = cache(loadRequisition);
+
+/** listRequisitions, memoised for the request — see `server/request-cache.ts`. */
+export function listRequisitions(
+  filters: RequisitionFilters = {},
+  actor?: User,
+): Promise<RequisitionRow[]> {
+  return once(queryKey("requisitions", filters, actor?.id), () => loadRequisitions(filters, actor));
 }

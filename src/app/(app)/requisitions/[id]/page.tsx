@@ -103,7 +103,7 @@ export default async function RequisitionDetailPage({
     notes,
   } = detail;
 
-  const summary = (await listRequisitions({ status: "all" }, actor)).find((r) => r.id === id)!;
+  const summary = (await listRequisitions({ ids: [id], status: "all" }, actor))[0]!;
   const health = requisitionHealth(summary);
   const cards = await pipelineCards({ requisition: id }, actor);
   const activity = await requisitionActivity(id, 25);
