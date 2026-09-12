@@ -314,6 +314,33 @@ export const candidates = pgTable(
     tags: jsonb("tags").$type<string[]>().notNull().default([]),
     rating: integer("rating").notNull().default(0),
     lastContactedAt: timestamp("last_contacted_at", { withTimezone: true }),
+    /**
+     * When this person's data was erased, and why (§23).
+     *
+     * Distinct from `deletedAt`, and the distinction is the whole point. A
+     * soft delete hides a record and keeps every field, so it can be undone;
+     * an erasure overwrites the personal data and cannot be. The row survives
+     * because the submissions, interviews and offers attached to it are the
+     * organisation's own records of its hiring process, which it is entitled
+     * and often required to keep — but they are attached to a tombstone,
+     * with nothing left that identifies a person.
+     *
+     * The date and the reason are kept deliberately: a data controller has to
+     * be able to show that a request was honoured, and "this row is empty"
+     * is not evidence of anything.
+     */
+    erasedAt: timestamp("erased_at", { withTimezone: true }),
+    erasedBy: text("erased_by"),
+    /** "request" (the person asked) or "retention" (the policy expired). */
+    erasureReason: text("erasure_reason"),
+    /**
+     * Consent to be kept on file past the retention period.
+     *
+     * Null means never asked, which the retention sweep treats as no — a
+     * record nobody has touched in two years and who never agreed to be kept
+     * is exactly what a retention policy exists to remove.
+     */
+    retentionConsentAt: timestamp("retention_consent_at", { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     ...stewardship(),
@@ -323,6 +350,7 @@ export const candidates = pgTable(
     index("cand_owner_idx").on(t.ownerId),
     index("cand_status_idx").on(t.status),
     index("cand_deleted_idx").on(t.deletedAt),
+    index("cand_erased_idx").on(t.erasedAt),
   ],
 );
 

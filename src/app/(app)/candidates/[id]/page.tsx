@@ -34,6 +34,7 @@ import {
 import { AttachmentPanel } from "@/components/domain/attachment-panel";
 import { CommunicationLog } from "@/components/domain/communication-log";
 import { DuplicatePanel } from "@/components/domain/duplicate-panel";
+import { PrivacyPanel } from "@/components/domain/privacy-panel";
 import { potentialDuplicates } from "@/server/queries/duplicates";
 import { EditCandidateButton } from "@/components/domain/forms/candidate-form";
 import { scorecardMap } from "@/server/queries/scorecards";
@@ -458,6 +459,16 @@ export default async function CandidateDetailPage({
               kind="resume"
               title="Resume and documents"
               description="The CV the client sees, plus anything else worth keeping on file."
+            />
+
+            {/* Data-subject requests (§23) */}
+            <PrivacyPanel
+              candidateId={c.id}
+              candidateName={name}
+              erasedAt={c.erasedAt}
+              consentAt={c.retentionConsentAt}
+              canErase={can(actor, "privacy.manage")}
+              canRecordConsent={can(actor, "candidate.edit")}
             />
 
             {/* Offers */}

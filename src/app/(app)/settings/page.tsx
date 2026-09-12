@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { KanbanSquare, Plug, ShieldCheck, SlidersHorizontal, Timer } from "lucide-react";
+import { KanbanSquare, Plug, ShieldCheck, ShieldOff, SlidersHorizontal, Timer } from "lucide-react";
 import { eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -17,6 +17,7 @@ import {
 } from "@/components/domain/forms/stage-form";
 import { integrationStatus } from "@/server/integrations/ports";
 import { queueHealth } from "@/server/jobs/queue";
+import { erasureLog, RETENTION } from "@/server/privacy";
 import { RECURRING } from "@/server/jobs/schedule";
 import { listStageRows } from "@/server/pipeline";
 import { listScorecards } from "@/server/queries/scorecards";
@@ -44,6 +45,7 @@ export default async function SettingsPage() {
   const matrix = await permissionMatrixView();
   const integrations = integrationStatus();
   const queue = await queueHealth();
+  const erasures = await erasureLog();
 
   // How many people are standing in each stage, so a delete can be refused with
   // a reason rather than stranding them somewhere nothing renders.
@@ -386,6 +388,85 @@ export default async function SettingsPage() {
             is retried with a widening delay and, once its attempts run out, stays here as a
             failed row &mdash; the only record that something expected did not happen. Finished
             rows are kept for a day so &ldquo;did it run this morning?&rdquo; has an answer.
+          </p>
+        </Card>
+
+        <Card padded={false}>
+          <div className="p-5 pb-4">
+            <CardHeader
+              icon={<ShieldOff className="size-4" />}
+              title="Data retention and erasure"
+              description="How long personal data is kept, and what has been erased on request."
+            />
+          </div>
+
+          <ul className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
+            {RETENTION.map((r) => (
+              <li key={r.key} className="flex flex-wrap items-start gap-x-4 gap-y-1.5 px-5 py-3.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13.5px] font-medium text-content">{r.label}</p>
+                  <p className="mt-0.5 text-[12px] leading-relaxed text-content-subtle">
+                    {r.description}
+                  </p>
+                </div>
+                <Badge tone="neutral" size="sm" variant="outline">
+                  {r.days >= 365
+                    ? `${Math.round((r.days / 365) * 10) / 10} years`
+                    : `${r.days} day${r.days === 1 ? "" : "s"}`}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+
+          {erasures.length ? (
+            <TableShell>
+              <Table>
+                <thead>
+                  <Tr>
+                    <Th>Erased</Th>
+                    <Th>Why</Th>
+                    <Th align="right">When</Th>
+                  </Tr>
+                </thead>
+                <tbody>
+                  {erasures.map((e) => (
+                    <Tr key={e.id}>
+                      <Td>
+                        <span className="font-mono text-[11.5px] text-content-muted">{e.id}</span>
+                      </Td>
+                      <Td>
+                        <Badge tone={e.reason === "request" ? "rose" : "slate"} size="sm">
+                          {e.reason === "request"
+                            ? `on request${e.actorName ? ` · ${e.actorName}` : ""}`
+                            : "retention policy"}
+                        </Badge>
+                      </Td>
+                      <Td align="right">
+                        <span className="text-[12.5px] text-content-subtle tabular-nums">
+                          {e.erasedAt?.toLocaleDateString()}
+                        </span>
+                      </Td>
+                    </Tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableShell>
+          ) : null}
+
+          <p className="border-t border-border-base px-5 py-3 text-[12px] leading-relaxed text-content-subtle">
+            Erasure is not the soft delete used elsewhere. It overwrites every identifying field,
+            removes the documents from storage and clears the free text from notes, scorecards and
+            the audit trail &mdash; and cannot be undone. What survives is the shape of each
+            application, which is this organisation&rsquo;s own record of its hiring process and
+            names nobody afterwards. Only a role holding <strong>Handle data-subject
+            requests</strong> can do it; by default that is Super Admin alone.
+            <br />
+            <br />
+            <strong className="text-content">Encryption at rest</strong> is a deployment control,
+            not an application one: it belongs to the volume or the managed Postgres instance.
+            Encrypting these columns in the application would put the key beside the data and
+            break every search that makes the product work, which is security theatre rather than
+            security.
           </p>
         </Card>
 

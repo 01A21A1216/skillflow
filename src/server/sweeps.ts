@@ -11,8 +11,11 @@ import {
   requisitions,
   submissions,
 } from "@/db/schema";
+import { logActivity } from "@/server/actions/shared";
 import { notify } from "@/server/notify";
+import { dormantCandidates, eraseCandidate, rule } from "@/server/privacy";
 import { loadPipeline } from "@/server/pipeline";
+import { communications, sessions } from "@/db/schema";
 
 const DAY = 86_400_000;
 
@@ -202,4 +205,65 @@ export async function idleCandidateSweep() {
       dedupeKey: `candidate_idle:${r.submissionId}:${r.stage}`,
     });
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Retention (§23)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Apply the retention policy.
+ *
+ * The one sweep in this file that deletes rather than notifies, which is why
+ * it reports what it did. An erasure the business cannot see happening is an
+ * erasure nobody can answer questions about, so every run returns its counts
+ * and each individual erasure writes its own audit entry.
+ *
+ * The actor is recorded as the system rather than as whoever happened to
+ * trigger the pass. Attributing an automatic deletion to a person who merely
+ * opened a page would make the audit trail a lie.
+ */
+export const RETENTION_ACTOR = "system:retention";
+
+export async function retentionSweep() {
+  const now = new Date();
+
+  const due = await dormantCandidates(now, 200);
+  let erased = 0;
+  for (const person of due) {
+    const result = await eraseCandidate(person.id, RETENTION_ACTOR, "retention");
+    if (!result) continue;
+    erased += 1;
+    await logActivity({
+      entityType: "candidate",
+      entityId: person.id,
+      type: "data_erased",
+      actorId: null,
+      summary: `Personal data erased — dormant for over ${Math.round(rule("candidate_dormant").days / 365)} years`,
+      meta: { reason: "retention", documentsDeleted: result.documentsDeleted },
+    });
+  }
+
+  // Old message bodies. The row stays — that contact happened on a date is a
+  // record of what the business did — and the content goes.
+  const commsCutoff = new Date(now.getTime() - rule("communications").days * DAY);
+  const scrubbed = await db
+    .update(communications)
+    .set({ subject: "[retained: content removed]", body: "" })
+    .where(and(lt(communications.occurredAt, commsCutoff), sql`${communications.body} <> ''`))
+    .returning({ id: communications.id });
+
+  // Sessions are pure liability once expired: a token hash and a user agent,
+  // useful to nobody and interesting to an attacker.
+  const sessionCutoff = new Date(now.getTime() - rule("sessions").days * DAY);
+  const expired = await db
+    .delete(sessions)
+    .where(lt(sessions.expiresAt, sessionCutoff))
+    .returning({ id: sessions.id });
+
+  return {
+    candidatesErased: erased,
+    communicationsScrubbed: scrubbed.length,
+    sessionsRemoved: expired.length,
+  };
 }

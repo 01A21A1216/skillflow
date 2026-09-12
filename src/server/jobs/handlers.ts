@@ -7,7 +7,12 @@ import {
   requisitionPublished,
   sendEmail,
 } from "@/server/integrations/outbound";
-import { feedbackOverdueSweep, idleCandidateSweep, requirementSweep } from "@/server/sweeps";
+import {
+  feedbackOverdueSweep,
+  idleCandidateSweep,
+  requirementSweep,
+  retentionSweep,
+} from "@/server/sweeps";
 
 import { sweepFinished } from "./queue";
 
@@ -57,6 +62,17 @@ export const HANDLERS = {
   "sweep.feedback_overdue": () => feedbackOverdueSweep(),
   "sweep.requirements": () => requirementSweep(),
   "sweep.idle_candidates": () => idleCandidateSweep(),
+
+  /* The retention policy (§23). The only scheduled job that deletes, which is
+   * why it runs once a day rather than hourly: there is no urgency to erasing
+   * somebody a few hours sooner, and a policy bug that runs daily is caught
+   * with far less damage than one that runs every hour. */
+  "retention.apply": async () => {
+    const result = await retentionSweep();
+    if (result.candidatesErased) {
+      console.info(`[retention] erased ${result.candidatesErased} dormant candidate(s)`);
+    }
+  },
 
   /* Housekeeping on the queue itself. A queue that does not prune its own
    * history becomes the largest table in the database within a month. */

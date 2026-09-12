@@ -72,6 +72,7 @@ export const PERMISSIONS = [
   { key: "report.export", label: "Export reports", category: "Reporting", description: "Download report data." },
   { key: "audit.view", label: "View the audit trail", category: "Governance", description: "Read the full activity and change history." },
   { key: "settings.manage", label: "Manage settings", category: "Governance", description: "Configure roles, permissions and pipeline stages." },
+  { key: "privacy.manage", label: "Handle data-subject requests", category: "Governance", description: "Export everything held about a person, and erase it on request. Separate from deleting a record.", sensitive: true },
 
   /* ---- Notes ---- */
   { key: "note.create", label: "Add notes", category: "Collaboration", description: "Comment on requirements, candidates and submissions." },
@@ -141,7 +142,11 @@ export const ROLES: readonly RoleDef[] = [
     label: "Recruitment Manager",
     description: "Runs the whole recruiting organisation: every requirement, every desk, plus offer approval.",
     rank: 10,
-    permissions: ALL.filter((p) => p !== "settings.manage"),
+    // Not settings, and not erasure. Erasure is irreversible and answers a
+    // legal request rather than a recruiting need, so the restrictive default
+    // is the right one — an organisation whose ops lead fields those emails
+    // can grant it, which is the point of the matrix being rows.
+    permissions: ALL.filter((p) => p !== "settings.manage" && p !== "privacy.manage"),
   },
   {
     key: "recruiter",

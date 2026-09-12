@@ -44,6 +44,11 @@ export const RECURRING: Recurring[] = [
     description: "Find live candidates who have not moved in a fortnight.",
   },
   {
+    kind: "retention.apply",
+    everyMinutes: 24 * 60,
+    description: "Erase dormant candidates, clear old message bodies, drop expired sessions.",
+  },
+  {
     kind: "jobs.prune",
     everyMinutes: 24 * 60,
     description: "Discard finished job history so this table does not grow without bound.",
