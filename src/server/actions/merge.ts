@@ -62,7 +62,7 @@ async function mergeCandidatesImpl(actor: User, formData: FormData): Promise<Act
   const collisions = mergeSubs.filter((s) => keepByReq.has(s.requisitionId));
   const movable = mergeSubs.filter((s) => !keepByReq.has(s.requisitionId));
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     // 1. Move everything that can simply move.
     if (movable.length) {
       (await tx.update(submissions)

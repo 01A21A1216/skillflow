@@ -151,7 +151,7 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
   // Whichever stage the configured pipeline calls the start of interviewing.
   const interviewEntry = pipeline.entryOf("interviewing");
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.insert(interviews)
       .values({
         id,

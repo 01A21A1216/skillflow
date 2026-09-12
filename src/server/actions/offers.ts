@@ -76,7 +76,7 @@ async function createOfferImpl(actor: User, formData: FormData): Promise<ActionS
   const id = newId("ofr");
   const now = new Date();
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.insert(offers)
       .values({
         id,
@@ -227,7 +227,7 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
 
   const now = new Date();
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.update(offers)
       .set({
         status: to,
@@ -264,7 +264,20 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
         );
     }
 
-    if (["declined", "rescinded"].includes(to) && ctx.submission.status === "active") {
+    /*
+     * Closing the candidate out.
+     *
+     * The status check has to admit `hired`, not just `active`. Declining
+     * only happens from Extended, where the submission is still active — but
+     * rescinding happens from Accepted too, where it is already hired, and
+     * that is precisely the case the seat recount below exists for. Guarding
+     * on `active` alone meant a rescinded hire stayed hired, so the recount
+     * found the same number of hires and the seat never came back.
+     */
+    if (
+      ["declined", "rescinded"].includes(to) &&
+      ["active", "hired"].includes(ctx.submission.status)
+    ) {
       (await tx.update(submissions)
         .set({
           stage: to === "declined" ? "withdrawn" : "rejected",
@@ -288,6 +301,16 @@ async function transitionOfferImpl(actor: User, formData: FormData): Promise<Act
           createdAt: now,
         })
         );
+
+      // Acceptance marks the person Placed. Undoing it has to hand them back
+      // to the talent pool, or they stay filtered out of every search on a
+      // job they never started.
+      if (ctx.submission.status === "hired") {
+        (await tx.update(candidates)
+          .set({ status: "active", updatedAt: now })
+          .where(eq(candidates.id, ctx.candidate.id))
+          );
+      }
     }
   });
 

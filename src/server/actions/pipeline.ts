@@ -124,7 +124,7 @@ async function addToPipelineImpl(actor: User, formData: FormData): Promise<Actio
   const now = new Date();
   const stage = entry.stage;
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.insert(submissions)
       .values({
         id,
@@ -232,7 +232,7 @@ async function moveStageImpl(actor: User, formData: FormData): Promise<ActionSta
   const hiring = target === "joined";
   const now = new Date();
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.update(submissions)
       .set({
         stage: target,
@@ -332,7 +332,7 @@ async function rejectSubmissionImpl(actor: User, formData: FormData): Promise<Ac
 
   const now = new Date();
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.update(submissions)
       .set({
         stage: outcome,
@@ -416,7 +416,7 @@ async function holdSubmissionImpl(actor: User, formData: FormData): Promise<Acti
 
   const now = new Date();
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.update(submissions)
       .set({
         stage: "on_hold",
@@ -489,7 +489,7 @@ async function reopenSubmissionImpl(actor: User, formData: FormData): Promise<Ac
       ? await lastLiveStage(submissionId, restartAt.stage)
       : restartAt.stage;
 
-  db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     (await tx.update(submissions)
       .set({
         stage: resumeAt,
