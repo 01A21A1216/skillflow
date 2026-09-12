@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   useDraggable,
   useDroppable,
@@ -12,6 +13,7 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
+  type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
 import { CalendarClock, GripVertical, ShieldAlert, Star } from "lucide-react";
 
@@ -25,6 +27,51 @@ import { Avatar } from "@/components/ui/avatar";
 import { toneVars } from "@/components/ui/tone";
 import { AgeChip, SkillChips } from "./badges";
 import { CardActions, usePipelineOptions } from "./pipeline-actions";
+
+/**
+ * Arrow keys move a dragged card a whole column at a time.
+ *
+ * dnd-kit's default keyboard getter steps 25 pixels per press, which on a
+ * board of 312-pixel columns means thirteen presses to move one stage.
+ * `sortableKeyboardCoordinates` is no better here — it is built for sortable
+ * lists, and this board is plain droppables. So: left and right jump to the
+ * next column's centre, up and down scroll within one.
+ */
+const columnKeyboardCoordinates: KeyboardCoordinateGetter = (
+  event,
+  { currentCoordinates, context },
+) => {
+  const columns = [...context.droppableContainers.values()]
+    .filter((c) => c.rect.current)
+    .map((c) => ({ id: c.id, rect: c.rect.current! }))
+    .sort((a, b) => a.rect.left - b.rect.left);
+
+  if (!columns.length) return undefined;
+
+  const here = columns.findIndex(
+    (c) => currentCoordinates.x >= c.rect.left && currentCoordinates.x <= c.rect.left + c.rect.width,
+  );
+
+  switch (event.code) {
+    case "ArrowRight": {
+      const next = columns[Math.min(here + 1, columns.length - 1)];
+      return next ? { ...currentCoordinates, x: next.rect.left + next.rect.width / 2 } : undefined;
+    }
+    case "ArrowLeft": {
+      const prev = columns[Math.max(here - 1, 0)];
+      return prev ? { ...currentCoordinates, x: prev.rect.left + prev.rect.width / 2 } : undefined;
+    }
+    case "ArrowDown":
+      return { ...currentCoordinates, y: currentCoordinates.y + 80 };
+    case "ArrowUp":
+      return { ...currentCoordinates, y: currentCoordinates.y - 80 };
+    default:
+      return undefined;
+  }
+};
+
+/** Cards rendered per column before the rest are behind a control. */
+const COLUMN_CAP = 40;
 
 interface Move {
   id: string;
@@ -61,8 +108,47 @@ export function PipelineBoard({
     ),
   );
 
+  // Pointer *and* keyboard. A board that can only be operated by dragging
+  // excludes anyone who does not use a mouse, and moving a candidate forward
+  // is the single most common action in the application.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: columnKeyboardCoordinates }),
+  );
+
+  /**
+   * What a screen reader hears while dragging.
+   *
+   * dnd-kit's defaults describe positions ("moved to position 3"), which on a
+   * kanban board is meaningless — the useful fact is which column you are
+   * over and whose card you are holding.
+   */
+  const announcements = useMemo(
+    () => ({
+      onDragStart({ active }: { active: { id: string | number } }) {
+        const card = optimistic.find((c) => c.id === active.id);
+        return card
+          ? `Picked up ${card.candidateName}, currently in ${pipeline.label(card.stage)}. Use the arrow keys to choose a column, space to drop, escape to cancel.`
+          : "Picked up a candidate.";
+      },
+      onDragOver({ active, over }: { active: { id: string | number }; over: { id: string | number } | null }) {
+        const card = optimistic.find((c) => c.id === active.id);
+        if (!over || !card) return undefined;
+        return `${card.candidateName} is over ${pipeline.label(String(over.id))}.`;
+      },
+      onDragEnd({ active, over }: { active: { id: string | number }; over: { id: string | number } | null }) {
+        const card = optimistic.find((c) => c.id === active.id);
+        if (!card) return undefined;
+        return over
+          ? `${card.candidateName} moved to ${pipeline.label(String(over.id))}.`
+          : `${card.candidateName} was not moved.`;
+      },
+      onDragCancel({ active }: { active: { id: string | number } }) {
+        const card = optimistic.find((c) => c.id === active.id);
+        return card ? `Move cancelled. ${card.candidateName} stayed where they were.` : undefined;
+      },
+    }),
+    [optimistic, pipeline],
   );
 
   const shown = useMemo(
@@ -106,7 +192,13 @@ export function PipelineBoard({
   }
 
   return (
-    <DndContext id="pipeline-board" sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+    <DndContext
+      id="pipeline-board"
+      sensors={sensors}
+      accessibility={{ announcements }}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+    >
       <div className="flex gap-3 overflow-x-auto pb-2">
         {shown.map((stage) => (
           <Column
@@ -148,6 +240,19 @@ function Column({
   const meta = usePipeline().get(stage);
   const aging = cards.filter((c) => c.isAging).length;
 
+  /**
+   * Cards are capped rather than virtualised.
+   *
+   * Virtualisation and drag-and-drop are in tension: dnd-kit needs its drop
+   * targets mounted to measure them, so a windowed list breaks dragging onto
+   * anything scrolled out of view. A cap bounds the DOM — which was the
+   * actual concern — without that conflict, and the cards beyond it are the
+   * freshest ones in a column already sorted oldest-first.
+   */
+  const [expanded, setExpanded] = useState(false);
+  const shownCards = expanded ? cards : cards.slice(0, COLUMN_CAP);
+  const hidden = cards.length - shownCards.length;
+
   return (
     <section
       ref={setNodeRef}
@@ -178,7 +283,7 @@ function Column({
 
       <div className="flex min-h-[6rem] flex-1 flex-col gap-2 px-2 pb-2">
         {cards.length ? (
-          cards.map((card) => (
+          shownCards.map((card) => (
             draggable ? (
               <DraggableCard
                 key={card.id}
@@ -195,6 +300,16 @@ function Column({
             {draggable ? "Drop a candidate here" : "Nobody at this stage"}
           </p>
         )}
+
+        {hidden > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="rounded-lg border border-dashed border-border-strong px-2 py-2 text-[12px] text-content-muted transition-colors hover:bg-surface hover:text-content"
+          >
+            Show {hidden} more
+          </button>
+        ) : null}
       </div>
     </section>
   );
@@ -210,14 +325,22 @@ function DraggableCard({
   compact: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: card.id });
+  const pipeline = usePipeline();
 
   return (
+    // `attributes` already supplies role, tabIndex and the keyboard
+    // instructions dnd-kit needs; the label is overridden because the default
+    // says "draggable item" and a recruiter needs to know *whose* card has
+    // focus before they start moving it.
     <div
       ref={setNodeRef}
       {...listeners}
       {...attributes}
+      aria-label={`${card.candidateName}, ${pipeline.label(card.stage)} on ${card.requisitionCode}`}
       className={cn(
-        "cursor-grab touch-none select-none active:cursor-grabbing",
+        "cursor-grab touch-none select-none rounded-lg outline-none",
+        "focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-[hsl(var(--surface-muted))]",
+        "active:cursor-grabbing",
         isDragging && "opacity-35",
       )}
     >
