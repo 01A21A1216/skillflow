@@ -43,13 +43,17 @@ export function Td({
   children,
   className,
   align = "left",
+  colSpan,
 }: {
   children?: ReactNode;
   className?: string;
   align?: "left" | "right" | "center";
+  /** For a full-width row, such as a group heading inside a table body. */
+  colSpan?: number;
 }) {
   return (
     <td
+      colSpan={colSpan}
       className={cn(
         "border-b border-border-base px-4 py-3 align-middle text-content",
         align === "right" && "text-right",

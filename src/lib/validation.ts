@@ -337,6 +337,67 @@ export const stageOrderSchema = z.object({
 });
 
 /* ------------------------------------------------------------------ *
+ * Scorecard templates
+ * ------------------------------------------------------------------ */
+
+/**
+ * A scorecard template and its competencies, saved together.
+ *
+ * One schema rather than a template schema plus a criterion schema, because
+ * a template with no competencies is a scorecard nobody can fill in, and a
+ * criterion with no template is nothing at all. Saving them as one thing means
+ * the invalid intermediate states cannot be reached.
+ *
+ * The criteria arrive as three parallel arrays because that is what a form of
+ * repeated rows submits; they are zipped in the action, where a length
+ * mismatch can be reported rather than silently misaligning a label with
+ * somebody else's key.
+ */
+export const scorecardTemplateSchema = z.object({
+  templateId: optionalText(60),
+  name: nonEmpty("Name", 80),
+  description: optionalText(300),
+  isDefault: z.coerce.boolean().default(false),
+  active: z.coerce.boolean().default(true),
+  criterionKey: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(2, "Give each competency a key")
+        .max(40)
+        .regex(/^[a-z][a-z0-9_]*$/, "Lower case letters, digits and underscores only"),
+    )
+    .min(1, "A scorecard needs at least one competency")
+    .max(12, "Twelve competencies is already more than a panel will fill in honestly"),
+  criterionLabel: z.array(z.string().trim().min(1, "Label").max(60)).min(1),
+  criterionDescription: z.array(z.string().trim().max(200)).default([]),
+  rowVersion: z.coerce.number().int().optional(),
+});
+
+export const scorecardDeleteSchema = z.object({
+  templateId: nonEmpty("Template"),
+});
+
+/* ------------------------------------------------------------------ *
+ * Role permissions
+ * ------------------------------------------------------------------ */
+
+/**
+ * One cell of the permission matrix.
+ *
+ * Deliberately one cell at a time rather than the whole grid. A form that
+ * posts every checkbox would let two administrators editing at once silently
+ * undo each other's changes, and it would make the audit entry read "changed
+ * permissions" rather than naming what changed.
+ */
+export const rolePermissionSchema = z.object({
+  roleKey: nonEmpty("Role"),
+  permissionKey: nonEmpty("Permission"),
+  granted: z.coerce.boolean(),
+});
+
+/* ------------------------------------------------------------------ *
  * Notes
  * ------------------------------------------------------------------ */
 

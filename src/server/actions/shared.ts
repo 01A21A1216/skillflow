@@ -61,8 +61,16 @@ export function parseForm<T extends z.ZodTypeAny>(
     delete raw[key];
   }
 
-  // Unchecked checkboxes are simply absent from FormData.
-  for (const key of ["willingToRelocate", "pinned", "active"]) {
+  /*
+   * Checkbox values.
+   *
+   * `Checkbox` renders a hidden companion for every boolean toggle, so an
+   * unchecked one arrives as "" rather than not arriving at all — without
+   * which a field defaulting to true could never be switched off. Here the
+   * browser's "on" and that "" become real booleans, because `z.coerce
+   * .boolean()` is `Boolean()`, and `Boolean("false")` is true.
+   */
+  for (const key of ["willingToRelocate", "pinned", "active", "isDefault", "granted"]) {
     if (key in raw) raw[key] = raw[key] === "on" || raw[key] === "true";
   }
 

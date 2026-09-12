@@ -11,6 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { StageKindBadge } from "@/components/domain/badges";
 import { RunJobsButton } from "@/components/domain/forms/run-jobs-button";
 import {
+  NewScorecardButton,
+  ScorecardRowActions,
+  type ScorecardRow,
+} from "@/components/domain/forms/scorecard-form";
+import {
   NewStageButton,
   StageRowActions,
   type StageRow,
@@ -20,8 +25,9 @@ import { queueHealth } from "@/server/jobs/queue";
 import { erasureLog, RETENTION } from "@/server/privacy";
 import { RECURRING } from "@/server/jobs/schedule";
 import { listStageRows } from "@/server/pipeline";
-import { listScorecards } from "@/server/queries/scorecards";
+import { scorecardSettings } from "@/server/queries/scorecards";
 import { permissionMatrixView } from "@/server/queries/people";
+import { PermissionMatrix } from "@/components/domain/permission-matrix";
 import { requirePermission } from "@/server/session";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +47,7 @@ export default async function SettingsPage() {
   await requirePermission("settings.manage");
 
   const stages = await listStageRows();
-  const scorecards = await listScorecards();
+  const scorecards = await scorecardSettings();
   const matrix = await permissionMatrixView();
   const integrations = integrationStatus();
   const queue = await queueHealth();
@@ -75,6 +81,17 @@ export default async function SettingsPage() {
   }));
 
   const nextPosition = Math.max(-1, ...rows.map((r) => r.position)) + 1;
+
+  const scorecardRows: ScorecardRow[] = scorecards.map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    isDefault: t.isDefault,
+    active: t.active,
+    criteria: t.criteria,
+    usedBy: t.usedBy,
+    scored: t.scored,
+  }));
 
   return (
     <>
@@ -168,43 +185,62 @@ export default async function SettingsPage() {
         </Card>
 
         <Card padded={false}>
-          <div className="p-5 pb-4">
+          <div className="flex flex-wrap items-start justify-between gap-3 p-5 pb-4">
             <CardHeader
               icon={<SlidersHorizontal className="size-4" />}
               title="Scorecards"
               description="What interview panels score against. A requirement picks one; the default covers the rest."
             />
+            <NewScorecardButton />
           </div>
           <ul className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
-            {scorecards.map((t) => (
-              <li key={t.id ?? t.name} className="px-5 py-3.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[13.5px] font-medium text-content">{t.name}</p>
-                  {t.isDefault ? (
-                    <Badge tone="emerald" size="sm">
-                      default
-                    </Badge>
+            {scorecardRows.map((t) => (
+              <li key={t.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-3.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-[13.5px] font-medium text-content">{t.name}</p>
+                    {t.isDefault ? (
+                      <Badge tone="emerald" size="sm">
+                        default
+                      </Badge>
+                    ) : null}
+                    {!t.active ? (
+                      <Badge tone="neutral" size="sm" variant="outline">
+                        off
+                      </Badge>
+                    ) : null}
+                    {t.usedBy ? (
+                      <span className="text-[11.5px] text-content-subtle">
+                        {t.usedBy} requirement{t.usedBy === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </div>
+                  {t.description ? (
+                    <p className="mt-0.5 text-[12px] text-content-subtle">{t.description}</p>
                   ) : null}
-                  {!t.active ? (
-                    <Badge tone="neutral" size="sm" variant="outline">
-                      inactive
-                    </Badge>
-                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {t.criteria.map((c) => (
+                      <span
+                        key={c.key}
+                        title={c.description}
+                        className="rounded-md bg-surface-muted px-1.5 py-0.5 text-[11px] text-content-muted"
+                      >
+                        {c.label}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {t.criteria.map((c) => (
-                    <span
-                      key={c.key}
-                      title={c.description}
-                      className="rounded-md bg-surface-muted px-1.5 py-0.5 text-[11px] text-content-muted"
-                    >
-                      {c.label}
-                    </span>
-                  ))}
-                </div>
+                <ScorecardRowActions template={t} />
               </li>
             ))}
           </ul>
+          <p className="border-t border-border-base px-5 py-3 text-[12px] leading-relaxed text-content-subtle">
+            Labels and descriptions can be reworded freely: a scorecard already filed keeps the
+            wording its author saw, because it stores the template it was scored against. A
+            competency&rsquo;s <em>key</em> cannot change once a panel has scored on it &mdash;
+            the scores are stored under it &mdash; so those are shown locked, and a scorecard
+            with history is switched off rather than deleted.
+          </p>
         </Card>
 
         <Card padded={false}>
@@ -215,51 +251,18 @@ export default async function SettingsPage() {
               description="Permissions are rows, not code. This is what each role currently holds."
             />
           </div>
-          <TableShell>
-            <Table>
-              <thead>
-                <Tr>
-                  <Th>Permission</Th>
-                  {matrix.roles.map((r) => (
-                    <Th key={r.key} align="center">
-                      {r.label}
-                    </Th>
-                  ))}
-                </Tr>
-              </thead>
-              <tbody>
-                {matrix.permissions.map((p) => (
-                  <Tr key={p.key}>
-                    <Td>
-                      <p className="text-[13px] text-content">{p.label}</p>
-                      <p className="mt-0.5 text-[11.5px] text-content-subtle">{p.description}</p>
-                    </Td>
-                    {matrix.roles.map((r) => (
-                      <Td key={r.key} align="center">
-                        {matrix.granted.has(`${r.key}|${p.key}`) ? (
-                          <span
-                            className="inline-block size-1.5 rounded-full bg-[hsl(var(--tone-emerald))]"
-                            aria-label="granted"
-                          />
-                        ) : (
-                          <span className="text-content-subtle" aria-label="not granted">
-                            ·
-                          </span>
-                        )}
-                      </Td>
-                    ))}
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
-          </TableShell>
-          <p className="border-t border-border-base px-5 py-3 text-[12px] text-content-subtle">
-            Editing the matrix in-app is still on the backlog; today it is changed in{" "}
-            <code className="rounded bg-surface-muted px-1 py-0.5 font-mono text-[11px]">
-              src/lib/permissions.ts
-            </code>{" "}
-            and re-seeded. The rows above are read from the database, which is the runtime
-            authority either way.
+          <PermissionMatrix
+            roles={matrix.roles}
+            permissions={matrix.permissions}
+            granted={matrix.granted}
+          />
+
+          <p className="border-t border-border-base px-5 py-3 text-[12px] leading-relaxed text-content-subtle">
+            Every toggle saves on its own and writes its own audit entry naming the role and the
+            permission &mdash; a single Save for the whole grid would let two administrators
+            editing at once quietly undo each other. Changes take effect on the next request; no
+            restart, no re-seed. One thing is refused: revoking the last hold on{" "}
+            <strong>Manage settings</strong>, which would leave nobody able to change this again.
           </p>
         </Card>
         <Card padded={false}>

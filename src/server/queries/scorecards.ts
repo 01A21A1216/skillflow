@@ -1,9 +1,10 @@
 import "server-only";
 
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, isNotNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
+  feedback,
   interviews,
   requisitions,
   scorecardCriteria,
@@ -158,4 +159,56 @@ export async function scorecardOptions() {
   return all
     .filter((t) => t.active && t.id)
     .map((t) => ({ id: t.id!, name: t.name }));
+}
+
+/**
+ * Every template with what the settings screen needs to refuse a delete: how
+ * many requirements point at it, and whether a panel has already scored
+ * against it. Both are counted in SQL rather than by loading the rows.
+ */
+export async function scorecardSettings() {
+  const templates = await db
+    .select()
+    .from(scorecardTemplates)
+    .orderBy(asc(scorecardTemplates.name));
+
+  const criteria = await db
+    .select()
+    .from(scorecardCriteria)
+    .orderBy(asc(scorecardCriteria.position));
+
+  const usage = new Map(
+    (
+      await db
+        .select({
+          templateId: requisitions.scorecardTemplateId,
+          n: sql<number>`count(*)::int`,
+        })
+        .from(requisitions)
+        .where(isNotNull(requisitions.scorecardTemplateId))
+        .groupBy(requisitions.scorecardTemplateId)
+    ).map((r) => [r.templateId!, r.n]),
+  );
+
+  const scored = new Set(
+    (
+      await db
+        .selectDistinct({ templateId: feedback.templateId })
+        .from(feedback)
+        .where(isNotNull(feedback.templateId))
+    ).map((r) => r.templateId!),
+  );
+
+  return templates.map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    isDefault: t.isDefault,
+    active: t.active,
+    criteria: criteria
+      .filter((c) => c.templateId === t.id)
+      .map((c) => ({ key: c.key, label: c.label, description: c.description })),
+    usedBy: usage.get(t.id) ?? 0,
+    scored: scored.has(t.id),
+  }));
 }

@@ -248,8 +248,9 @@ export async function permissionMatrixView() {
       label: p.label,
       description: p.description,
       category: p.category,
+      sensitive: p.sensitive,
     })),
-    granted: new Set(grants.map((g) => `${g.roleKey}|${g.permissionKey}`)),
+    granted: grants.map((g) => `${g.roleKey}|${g.permissionKey}`),
   };
 }
 

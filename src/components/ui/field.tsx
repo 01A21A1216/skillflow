@@ -100,14 +100,41 @@ export function Checkbox({
   className,
   ...props
 }: InputHTMLAttributes<HTMLInputElement> & { label: ReactNode }) {
+  /*
+   * An unchecked checkbox is simply absent from FormData.
+   *
+   * For a boolean toggle that is a real bug rather than a quirk: a field with
+   * a `true` default can then be switched on but never off, because "off"
+   * arrives as "field not submitted" and the schema fills in the default.
+   * A hidden input of the same name, rendered first, makes "off" an actual
+   * value — the later checkbox wins when it is checked.
+   *
+   * Only for boolean toggles. A checkbox *group* carries an explicit `value`
+   * and posts one entry per selection; adding a blank companion there would
+   * put an empty string into the array.
+   */
+  const isToggle = props.name !== undefined && props.value === undefined;
+
   return (
-    <label className={cn("flex cursor-pointer items-center gap-2 text-[13px] text-content", className)}>
-      <input
-        type="checkbox"
-        className="size-4 shrink-0 cursor-pointer rounded border-border-strong accent-[hsl(var(--brand))]"
-        {...props}
-      />
-      {label}
-    </label>
+    <>
+      {/* Outside the label, not inside it: a label wrapping two labelable
+          elements names the first one, which would leave the checkbox itself
+          without an accessible name. A hidden input has no box, so this
+          changes no layout. */}
+      {isToggle ? <input type="hidden" name={props.name} value="" /> : null}
+      <label
+        className={cn(
+          "flex cursor-pointer items-center gap-2 text-[13px] text-content",
+          className,
+        )}
+      >
+        <input
+          type="checkbox"
+          className="size-4 shrink-0 cursor-pointer rounded border-border-strong accent-[hsl(var(--brand))]"
+          {...props}
+        />
+        {label}
+      </label>
+    </>
   );
 }
