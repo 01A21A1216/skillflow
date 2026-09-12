@@ -24,12 +24,14 @@ const DAY = 86_400_000;
  * candidate nobody has touched. Nothing happens to cause them, so something
  * has to come looking.
  *
- * Today the sweep runs when the notification inbox is opened, which is honest
- * about what this is: there is no scheduler yet (item 4.2), and a background
- * job that does not exist cannot be pretended into existence. Because every
- * notification is deduplicated on (person, fact), running it on every page
- * view is safe — the second run produces nothing. When a scheduler lands, the
- * only change is where `runSweeps()` is called from.
+ * Each sweep is a job kind (item 4.2, `jobs/handlers.ts`) and runs on a
+ * schedule, not on a page render. They are exported individually rather than
+ * only through `runSweeps()` so that one failing does not stop the other two,
+ * and so the queue can report which one was slow.
+ *
+ * Every notification they produce is deduplicated on (person, fact), so the
+ * cadence is a cost question rather than a correctness one: running a sweep
+ * twice writes nothing the second time.
  */
 
 /** Requirements within this many days of the client's SLA get a warning. */
@@ -39,6 +41,7 @@ const AGING_DAYS = 30;
 /** A live candidate untouched for this long has effectively been dropped. */
 const IDLE_DAYS = 14;
 
+/** All three, for a manual run from the settings screen. */
 export async function runSweeps() {
   await Promise.all([feedbackOverdueSweep(), requirementSweep(), idleCandidateSweep()]);
 }
@@ -49,7 +52,7 @@ export async function runSweeps() {
  * Deduplicated per person per interview, so this fires once however often the
  * sweep runs — the point is to tell someone, not to nag them hourly.
  */
-async function feedbackOverdueSweep() {
+export async function feedbackOverdueSweep() {
   const rows = await db
     .select({
       interviewId: interviews.id,
@@ -99,7 +102,7 @@ async function feedbackOverdueSweep() {
  * Two separate triggers because they need different responses: one is "start
  * pushing", the other is "this needs a conversation with the client".
  */
-async function requirementSweep() {
+export async function requirementSweep() {
   const rows = await db
     .select({
       id: requisitions.id,
@@ -155,7 +158,7 @@ async function requirementSweep() {
  * candidate sitting in one stage for a fortnight has been forgotten whatever
  * anybody has read.
  */
-async function idleCandidateSweep() {
+export async function idleCandidateSweep() {
   const pipeline = await loadPipeline();
   const cutoff = new Date(Date.now() - IDLE_DAYS * DAY);
 

@@ -10,7 +10,6 @@ import { listInterviews } from "@/server/queries/interviews";
 import { loadPipeline } from "@/server/pipeline";
 import { PipelineProvider } from "@/components/domain/pipeline-context";
 import { inbox, unreadCount, NOTIFICATION_TYPES, type NotificationType } from "@/server/notify";
-import { runSweeps } from "@/server/sweeps";
 
 /**
  * Every authenticated route renders through here, so the session check cannot
@@ -31,12 +30,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Published once here rather than fetched by each board, picker and badge.
   const pipeline = await loadPipeline();
 
-  // The sweeps that produce the "nothing happened" notifications (§14) run
-  // here, because there is no scheduler yet (item 4.2) and pretending
-  // otherwise would be worse than saying so. Every notification is
-  // deduplicated on (person, fact), so running them per request is safe: the
-  // second run writes nothing.
-  await runSweeps();
   const notifications = await inbox(actor.id);
   const unread = await unreadCount(actor.id);
 

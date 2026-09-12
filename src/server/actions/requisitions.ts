@@ -9,8 +9,8 @@ import type { User } from "@/db/schema";
 import { REQ_STATUS, type ReqStatus } from "@/lib/domain";
 import { requisitionSchema, requisitionStatusSchema } from "@/lib/validation";
 import { canTouchRequisition } from "@/server/authz";
-import { requisitionClosed, requisitionPublished } from "@/server/integrations/outbound";
 import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
+import { enqueue } from "@/server/jobs/queue";
 import { notify } from "@/server/notify";
 import {
   denied,
@@ -236,9 +236,19 @@ async function changeRequisitionStatusImpl(actor: User, formData: FormData): Pro
   // (Active Sourcing, Interviewing, …) describe internal progress and would
   // republish an unchanged advert every time a candidate moved.
   if (status === "open") {
-    await requisitionPublished(requisitionId);
+    await enqueue({
+      kind: "jobboard.publish",
+      payload: { requisitionId },
+      // Keyed to the version, so an edited advert republishes but an
+      // unchanged one re-posted twice does not.
+      dedupeKey: `jobboard.publish:${requisitionId}:${existing.rowVersion + 1}`,
+    });
   } else if (closing || status === "on_hold") {
-    await requisitionClosed(requisitionId);
+    await enqueue({
+      kind: "jobboard.unpublish",
+      payload: { requisitionId },
+      dedupeKey: `jobboard.unpublish:${requisitionId}:${existing.rowVersion + 1}`,
+    });
   }
 
   revalidatePath(`/requisitions/${requisitionId}`);

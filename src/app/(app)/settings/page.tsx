@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { KanbanSquare, Plug, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { KanbanSquare, Plug, ShieldCheck, SlidersHorizontal, Timer } from "lucide-react";
 import { eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -9,12 +9,15 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { Table, TableShell, Td, Th, Tr } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { StageKindBadge } from "@/components/domain/badges";
+import { RunJobsButton } from "@/components/domain/forms/run-jobs-button";
 import {
   NewStageButton,
   StageRowActions,
   type StageRow,
 } from "@/components/domain/forms/stage-form";
 import { integrationStatus } from "@/server/integrations/ports";
+import { queueHealth } from "@/server/jobs/queue";
+import { RECURRING } from "@/server/jobs/schedule";
 import { listStageRows } from "@/server/pipeline";
 import { listScorecards } from "@/server/queries/scorecards";
 import { permissionMatrixView } from "@/server/queries/people";
@@ -40,6 +43,7 @@ export default async function SettingsPage() {
   const scorecards = await listScorecards();
   const matrix = await permissionMatrixView();
   const integrations = integrationStatus();
+  const queue = await queueHealth();
 
   // How many people are standing in each stage, so a delete can be refused with
   // a reason rather than stranding them somewhere nothing renders.
@@ -256,6 +260,135 @@ export default async function SettingsPage() {
             authority either way.
           </p>
         </Card>
+        <Card padded={false}>
+          <div className="flex flex-wrap items-start justify-between gap-3 p-5 pb-4">
+            <CardHeader
+              icon={<Timer className="size-4" />}
+              title="Background work"
+              description="The sweeps that produce notifications nobody's action causes, and the outbound calls that should not make anyone wait."
+            />
+            <RunJobsButton />
+          </div>
+
+          <div className="grid grid-cols-2 gap-px border-y border-border-base bg-[hsl(var(--border))] sm:grid-cols-5">
+            {[
+              { label: "Waiting", value: queue.counts.pending },
+              { label: "Running", value: queue.counts.running },
+              { label: "Done today", value: queue.counts.done },
+              { label: "Failed", value: queue.counts.failed, alarming: queue.counts.failed > 0 },
+              {
+                label: "Oldest waiting",
+                value:
+                  queue.oldestPendingSeconds === null
+                    ? "—"
+                    : queue.oldestPendingSeconds < 90
+                      ? `${queue.oldestPendingSeconds}s`
+                      : `${Math.round(queue.oldestPendingSeconds / 60)}m`,
+                alarming: (queue.oldestPendingSeconds ?? 0) > 600,
+              },
+            ].map((stat) => (
+              <div key={stat.label} className="bg-surface px-5 py-3.5">
+                <p
+                  className={`text-[18px] font-semibold tabular-nums ${
+                    stat.alarming ? "text-[hsl(var(--tone-rose))]" : "text-content"
+                  }`}
+                >
+                  {stat.value}
+                </p>
+                <p className="mt-0.5 text-[11.5px] text-content-subtle">{stat.label}</p>
+              </div>
+            ))}
+          </div>
+
+          <ul className="divide-y divide-[hsl(var(--border))]">
+            {RECURRING.map((job) => (
+              <li key={job.kind} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-3">
+                <span className="font-mono text-[11.5px] text-content-muted">{job.kind}</span>
+                <span className="min-w-0 flex-1 text-[12.5px] text-content-subtle">
+                  {job.description}
+                </span>
+                <Badge tone="neutral" size="sm" variant="outline">
+                  {job.everyMinutes >= 60
+                    ? `every ${job.everyMinutes / 60}h`
+                    : `every ${job.everyMinutes}m`}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+
+          {queue.recent.length ? (
+            <TableShell>
+              <Table>
+                <thead>
+                  <Tr>
+                    <Th>Last run of each kind</Th>
+                    <Th align="center">Tries</Th>
+                    <Th align="right">Took</Th>
+                    <Th align="right">When</Th>
+                  </Tr>
+                </thead>
+                <tbody>
+                  {queue.recent.map((job) => (
+                    <Tr key={job.id}>
+                      <Td>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-[11.5px] text-content">{job.kind}</span>
+                          <Badge
+                            tone={
+                              job.status === "failed"
+                                ? "rose"
+                                : job.status === "done"
+                                  ? "emerald"
+                                  : job.status === "running"
+                                    ? "cyan"
+                                    : "neutral"
+                            }
+                            size="sm"
+                            variant={job.status === "pending" ? "outline" : "solid"}
+                          >
+                            {job.status}
+                          </Badge>
+                        </div>
+                        {job.lastError ? (
+                          <p className="mt-1 text-[11.5px] text-[hsl(var(--tone-rose))]">
+                            {job.lastError}
+                          </p>
+                        ) : null}
+                      </Td>
+                      <Td align="center">
+                        <span className="text-[12.5px] text-content-muted tabular-nums">
+                          {job.attempts}
+                        </span>
+                      </Td>
+                      <Td align="right">
+                        <span className="text-[12.5px] text-content-muted tabular-nums">
+                          {job.durationMs === null ? "—" : `${job.durationMs}ms`}
+                        </span>
+                      </Td>
+                      <Td align="right">
+                        <span className="text-[12.5px] text-content-subtle tabular-nums">
+                          {(job.finishedAt ?? job.runAt).toLocaleString()}
+                        </span>
+                      </Td>
+                    </Tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableShell>
+          ) : null}
+
+          <p className="border-t border-border-base px-5 py-3 text-[12px] leading-relaxed text-content-subtle">
+            The queue is a Postgres table claimed with{" "}
+            <code className="rounded bg-surface-muted px-1 py-0.5 font-mono text-[11px]">
+              for update skip locked
+            </code>
+            , so several server instances share the work without coordinating. A job that throws
+            is retried with a widening delay and, once its attempts run out, stays here as a
+            failed row &mdash; the only record that something expected did not happen. Finished
+            rows are kept for a day so &ldquo;did it run this morning?&rdquo; has an answer.
+          </p>
+        </Card>
+
         <Card padded={false}>
           <div className="p-5 pb-4">
             <CardHeader

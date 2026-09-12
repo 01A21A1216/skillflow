@@ -5,7 +5,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { notifications, users } from "@/db/schema";
-import { sendEmail } from "@/server/integrations/outbound";
+import { enqueue } from "@/server/jobs/queue";
 
 /**
  * Notifications (§14).
@@ -140,13 +140,21 @@ const outboundEmail: Transport = {
     for (const person of people) {
       // One message per person, keyed per person, so a retry cannot reach
       // anyone twice and a bounce for one recipient is not a bounce for all.
-      await sendEmail({
-        idempotencyKey: `${notification.dedupeKey}:${person.id}`,
-        to: [person.email],
-        subject: notification.title,
-        body: [notification.body, notification.href && `Open: ${notification.href}`]
-          .filter(Boolean)
-          .join("\n\n"),
+      // Queued rather than sent (item 4.2): a mutation is not held open by an
+      // SMTP handshake, and a provider that is briefly down costs a retry
+      // instead of a notification nobody ever receives.
+      const key = `${notification.dedupeKey}:${person.id}`;
+      await enqueue({
+        kind: "email.send",
+        dedupeKey: `email.send:${key}`,
+        payload: {
+          idempotencyKey: key,
+          to: [person.email],
+          subject: notification.title,
+          body: [notification.body, notification.href && `Open: ${notification.href}`]
+            .filter(Boolean)
+            .join("\n\n"),
+        },
       });
     }
   },

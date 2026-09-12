@@ -23,7 +23,7 @@ import {
   type InterviewType,
 } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
-import { interviewBooked, interviewChanged } from "@/server/integrations/outbound";
+import { enqueue } from "@/server/jobs/queue";
 import { notify } from "@/server/notify";
 import { nextInterviewStage, settleOutcome } from "@/server/rules";
 import {
@@ -229,9 +229,11 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
     dedupeKey: `interview_scheduled:${id}`,
   });
 
-  // Panel calendars, if a provider is configured (§22). Deliberately after the
-  // notification: the in-app record is the one this application guarantees.
-  await interviewBooked(id);
+  // Panel calendars, if a provider is configured (§22). Queued rather than
+  // called: a recruiter should not wait on someone else's API to find out
+  // their interview is booked, and a provider that is down should cost a
+  // retry rather than the booking.
+  await enqueue({ kind: "calendar.book", payload: { interviewId: id }, dedupeKey: `calendar.book:${id}` });
 
   revalidatePath("/interviews");
   revalidatePath("/pipeline");
@@ -339,7 +341,11 @@ async function updateInterviewOutcomeImpl(actor: User, formData: FormData): Prom
     });
   }
 
-  await interviewChanged(interviewId, status);
+  await enqueue({
+    kind: "calendar.change",
+    payload: { interviewId, status },
+    dedupeKey: `calendar.change:${interviewId}:${status}`,
+  });
 
   revalidatePath("/interviews");
   revalidatePath("/");

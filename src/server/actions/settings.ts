@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { pipelineStages, submissions } from "@/db/schema";
 import type { User } from "@/db/schema";
 import { stageOrderSchema, stageSchema } from "@/lib/validation";
+import { tick } from "@/server/jobs/worker";
 import { invalidatePipeline, loadPipeline } from "@/server/pipeline";
 import { checkVersion, diffFields, describeChanges, stamp, stampNew } from "@/server/integrity";
 import {
@@ -203,6 +204,33 @@ async function reorderStagesImpl(actor: User, formData: FormData): Promise<Actio
   return succeed("Pipeline reordered");
 }
 
+/**
+ * Run one pass of the queue now.
+ *
+ * Not a feature so much as an answer to "is the worker actually working?".
+ * The alternative is waiting out a poll interval and guessing, which is how
+ * background work quietly stops being trusted.
+ */
+async function runJobsNowImpl(actor: User): Promise<ActionState> {
+  const { claimed, ran } = await tick();
+
+  await logActivity({
+    entityType: "settings",
+    entityId: "jobs",
+    type: "settings_changed",
+    actorId: actor.id,
+    summary: `Ran the job queue by hand — ${ran} of ${claimed} finished cleanly`,
+  });
+
+  revalidatePath("/settings");
+  return succeed(
+    claimed === 0
+      ? "Nothing was due. The queue is up to date."
+      : `Ran ${claimed} job${claimed === 1 ? "" : "s"}; ${ran} finished cleanly.`,
+  );
+}
+
 export const saveStage = guarded("settings.manage", saveStageImpl);
 export const deleteStage = guarded("settings.manage", deleteStageImpl);
 export const reorderStages = guarded("settings.manage", reorderStagesImpl);
+export const runJobsNow = guarded("settings.manage", runJobsNowImpl);

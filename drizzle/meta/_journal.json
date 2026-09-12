@@ -15,6 +15,13 @@
       "when": 1789172639030,
       "tag": "0001_slippery_kinsey_walden",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789173208860,
+      "tag": "0002_legal_hercules",
+      "breakpoints": true
     }
   ]
 }

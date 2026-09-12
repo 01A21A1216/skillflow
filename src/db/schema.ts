@@ -774,6 +774,63 @@ export const activities = pgTable(
   ],
 );
 
+/**
+ * The work queue (§22).
+ *
+ * A table rather than Redis or SQS, because this deployment already has a
+ * Postgres and `select … for update skip locked` is precisely the primitive a
+ * queue needs: several workers can claim disjoint rows without blocking each
+ * other or each other's readers. Adding a second piece of infrastructure to
+ * run three sweeps and retry an HTTP call would be a cost with no matching
+ * benefit.
+ *
+ * Everything about a job is visible: what it is, when it should run, how many
+ * times it has been tried, what went wrong last time. That is the point. A
+ * background job people cannot see is a background job nobody debugs — it just
+ * quietly stops working and the first symptom is a notification that never
+ * arrived.
+ */
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: pk(),
+    /** Which handler runs this. Unknown kinds fail loudly rather than vanish. */
+    kind: text("kind").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    /** pending | running | done | failed */
+    status: text("status").notNull().default("pending"),
+    /** Not before this instant. Retries move it forward; nothing else does. */
+    runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    /**
+     * Stable for the work, not the attempt.
+     *
+     * Recurring jobs use the occurrence they represent ("sweeps:2026-09-11T14"),
+     * so several server instances racing to schedule the same tick produce one
+     * row. Unique, which is what makes that a database guarantee rather than a
+     * hope about timing.
+     */
+    dedupeKey: text("dedupe_key"),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    /** Which worker holds it, so a crashed instance's rows can be identified. */
+    lockedBy: text("locked_by"),
+    lastError: text("last_error"),
+    /** Wall-clock cost of the last attempt, for seeing a handler slow down. */
+    durationMs: integer("duration_ms"),
+    createdAt: createdAt(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("jobs_dedupe_idx").on(t.dedupeKey),
+    // The claim query's index: pending rows, soonest first.
+    index("jobs_claim_idx").on(t.status, t.runAt),
+    index("jobs_kind_idx").on(t.kind),
+  ],
+);
+
+export type Job = typeof jobs.$inferSelect;
+
 /** One field-level before/after pair on an audit entry. */
 export interface FieldChange {
   field: string;
