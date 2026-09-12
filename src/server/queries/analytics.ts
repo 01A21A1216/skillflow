@@ -474,12 +474,26 @@ export async function recruiterPerformance(since?: Date): Promise<RecruiterStat[
     hireDays.set(r.ownerId, list);
   }
 
+  // Milestones are read from the configured pipeline rather than from frozen
+  // stage keys. This block previously looked for `interview` and `hired`,
+  // which stopped existing when the stages were renamed — every recruiter's
+  // interview and hire counts had been silently reading zero since.
+  const pipeline = await loadPipeline();
+  const submittedEntry = pipeline.entryOf("submitted");
+  const interviewEntry = pipeline.entryOf("interviewing");
+  const offerEntry = pipeline.entryOf("offer");
+  const placementEntry = pipeline.entryOf("placement");
+
   return people
     .map((u) => {
       const r = reached.get(u.id) ?? {};
       const o = offerTally.get(u.id) ?? { accepted: 0, declined: 0 };
       const responded = o.accepted + o.declined;
       const open = openReqs.get(u.id) ?? 0;
+      const submitted = r[submittedEntry] ?? 0;
+      const interviewed = r[interviewEntry] ?? 0;
+      const offers = r[offerEntry] ?? 0;
+      const hires = r[placementEntry] ?? 0;
       return {
         id: u.id,
         name: u.name,
@@ -487,12 +501,12 @@ export async function recruiterPerformance(since?: Date): Promise<RecruiterStat[
         capacity: u.capacity,
         openReqs: open,
         activePipeline: activePipeline.get(u.id) ?? 0,
-        submitted: r.submitted ?? 0,
-        interviewed: r.interview ?? 0,
-        offers: r.offer ?? 0,
-        hires: r.hired ?? 0,
-        submitToInterview: pct(r.interview ?? 0, r.submitted ?? 0),
-        interviewToOffer: pct(r.offer ?? 0, r.interview ?? 0),
+        submitted,
+        interviewed,
+        offers,
+        hires,
+        submitToInterview: pct(interviewed, submitted),
+        interviewToOffer: pct(offers, interviewed),
         offerAcceptance: responded ? pct(o.accepted, responded) : 0,
         avgTimeToHire: average(hireDays.get(u.id) ?? []),
         load: u.capacity ? pct(open, u.capacity) : 0,

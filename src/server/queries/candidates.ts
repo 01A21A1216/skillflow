@@ -35,6 +35,8 @@ export interface CandidateFilters {
   minExp?: string;
   maxExp?: string;
   auth?: string;
+  availability?: string;
+  location?: string;
   inPipeline?: string;
   sort?: string;
 }
@@ -51,6 +53,9 @@ export interface CandidateRow {
   yearsExperience: number;
   seniority: string;
   skills: string[];
+  primaryTechnology: string;
+  availability: string;
+  expectedRate: number | null;
   tags: string[];
   source: string;
   status: string;
@@ -70,18 +75,25 @@ export interface CandidateRow {
 }
 
 
-const STAGE_RANK: Record<string, number> = {
-  sourced: 0,
-  screening: 1,
-  submitted: 2,
-  interview: 3,
-  offer: 4,
-  hired: 5,
-  rejected: -1,
-  withdrawn: -1,
-};
+/**
+ * How far through the pipeline a stage is, for "furthest stage reached".
+ *
+ * Derived from the configured pipeline rather than hard-coded: this was a
+ * frozen list of the original six stage names and had been silently wrong
+ * since they were renamed — every candidate's furthest stage read as null.
+ */
+async function stageRank(): Promise<Record<string, number>> {
+  const pipeline = await loadPipeline();
+  const rank: Record<string, number> = {};
+  pipeline.order.forEach((stage, i) => {
+    rank[stage] = i;
+  });
+  for (const t of pipeline.terminal) rank[t.key] = -1;
+  return rank;
+}
 
 async function submissionSummary() {
+  const STAGE_RANK = await stageRank();
   const rows = (await db
     .select({
       candidateId: submissions.candidateId,
@@ -134,6 +146,10 @@ export async function listCandidates(filters: CandidateFilters = {}, actor?: Use
     conditions.push(eq(candidates.workAuthorization, filters.auth));
   if (filters.skill && filters.skill !== "all")
     conditions.push(like(sql`lower(${candidates.skills}::text)`, `%${filters.skill.toLowerCase()}%`));
+  if (filters.availability && filters.availability !== "all")
+    conditions.push(eq(candidates.availability, filters.availability));
+  if (filters.location && filters.location !== "all")
+    conditions.push(like(sql`lower(${candidates.location})`, `%${filters.location.toLowerCase()}%`));
   if (filters.minExp) conditions.push(gte(candidates.yearsExperience, Number(filters.minExp)));
   if (filters.maxExp) conditions.push(lte(candidates.yearsExperience, Number(filters.maxExp)));
 
@@ -160,6 +176,9 @@ export async function listCandidates(filters: CandidateFilters = {}, actor?: Use
       yearsExperience: c.yearsExperience,
       seniority: c.seniority,
       skills: c.skills ?? [],
+      primaryTechnology: c.primaryTechnology,
+      availability: c.availability,
+      expectedRate: c.expectedRate,
       tags: c.tags ?? [],
       source: c.source,
       status: c.status,

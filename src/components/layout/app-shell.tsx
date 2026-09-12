@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   Menu,
   Settings,
+  Sparkles,
   Users,
   UsersRound,
   X,
@@ -75,6 +76,7 @@ const NAV = [
     anyOf: ["interview.view.all", "interview.view.own"],
   },
   { href: "/offers", label: "Offers", icon: FileSignature, count: "offers" as const, anyOf: ["offer.view"] },
+  { href: "/assistant", label: "Assistant", icon: Sparkles },
 ];
 
 const NAV_SECONDARY = [
