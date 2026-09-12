@@ -2,7 +2,7 @@ import "server-only";
 
 import { once, queryKey } from "@/server/request-cache";
 
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -20,6 +20,7 @@ import {
 } from "@/db/schema";
 import { visaMatches, type Stage } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
+import { matches } from "@/server/search";
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { submissionScope, visibleRequisitionIds } from "@/server/authz";
@@ -104,13 +105,11 @@ async function loadPipelineCards(filters: PipelineFilters = {}, actor?: User): P
     conditions.push(eq(requisitions.department, filters.department));
   if (filters.priority && filters.priority !== "all")
     conditions.push(eq(requisitions.priority, filters.priority));
+  // The board searches both sides of the join, so either vector may match.
   if (filters.q) {
-    const term = `%${filters.q.toLowerCase()}%`;
     const match = or(
-      like(sql`lower(${candidates.firstName} || ' ' || ${candidates.lastName})`, term),
-      like(sql`lower(${candidates.currentTitle})`, term),
-      like(sql`lower(${requisitions.title})`, term),
-      like(sql`lower(${requisitions.code})`, term),
+      matches(candidates.searchVector, filters.q) ?? undefined,
+      matches(requisitions.searchVector, filters.q) ?? undefined,
     );
     if (match) conditions.push(match);
   }

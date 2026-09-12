@@ -27,6 +27,7 @@ import { loadPipeline } from "@/server/pipeline";
 import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { redactCandidate } from "@/server/authz";
+import { matches, rank } from "@/server/search";
 import { listAttachments } from "@/server/queries/attachments";
 
 export interface CandidateFilters {
@@ -153,19 +154,10 @@ async function loadCandidateList(
   const stats = await submissionStats();
   const conditions = [];
 
-  if (filters.q) {
-    const term = `%${filters.q.toLowerCase()}%`;
-    conditions.push(
-      or(
-        like(sql`lower(${candidates.firstName} || ' ' || ${candidates.lastName})`, term),
-        like(sql`lower(${candidates.email})`, term),
-        like(sql`lower(${candidates.currentTitle})`, term),
-        like(sql`lower(${candidates.currentCompany})`, term),
-        like(sql`lower(${candidates.location})`, term),
-        like(sql`lower(${candidates.skills}::text)`, term),
-      ),
-    );
-  }
+  // Full-text against the generated, GIN-indexed vector (§22) rather than six
+  // `like '%term%'` comparisons, none of which any index could serve.
+  const textMatch = filters.q ? matches(candidates.searchVector, filters.q) : null;
+  if (textMatch) conditions.push(textMatch);
   if (filters.status && filters.status !== "all") conditions.push(eq(candidates.status, filters.status));
   if (filters.source && filters.source !== "all") conditions.push(eq(candidates.source, filters.source));
   if (filters.seniority && filters.seniority !== "all")
@@ -207,7 +199,19 @@ async function loadCandidateList(
     // has ever called.
     contacted: [sql`${candidates.lastContactedAt} desc nulls last`],
   };
-  const orderBy = ORDER[filters.sort ?? "recent"] ?? ORDER.recent!;
+  /*
+   * A search puts relevance first, whatever the sort says.
+   *
+   * Somebody who typed a name wants that person at the top; the sort control
+   * then breaks ties among equally relevant rows. Ignoring relevance because
+   * the dropdown says "Recently added" would bury an exact name match behind
+   * everyone added this week.
+   */
+  const relevance = filters.q ? rank(candidates.searchVector, filters.q) : null;
+  const orderBy = [
+    ...(relevance ? [desc(relevance)] : []),
+    ...(ORDER[filters.sort ?? "recent"] ?? ORDER.recent!),
+  ];
 
   const limit = filters.limit ?? 40;
   const offset = filters.offset ?? 0;

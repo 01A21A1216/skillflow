@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -28,6 +29,33 @@ import {
  * ------------------------------------------------------------------ */
 
 const pk = () => text("id").primaryKey();
+
+/**
+ * A Postgres `tsvector` (§22).
+ *
+ * Never read or written by the application — it is generated from the row and
+ * only ever appears on the left of a `@@`. Declared so Drizzle emits the
+ * column and its GIN index in a migration rather than leaving them to a hand-
+ * written script that a fresh database would not run.
+ */
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType: () => "tsvector",
+});
+
+/**
+ * How a record is indexed for search.
+ *
+ * Weighted, because relevance without weights is not relevance: someone typing
+ * a name wants the person called that, not the one whose summary mentions it.
+ * `A` is what the record is, `B` its strongest secondary identifiers, `C`
+ * context worth finding on, `D` prose where a word proves little.
+ *
+ * Generated and stored, so Postgres maintains it. There is no write path that
+ * can forget to reindex, which is exactly the failure mode of a search index
+ * the application updates itself.
+ */
+const searchVector = (expression: ReturnType<typeof sql>) =>
+  tsvector("search_vector").generatedAlwaysAs(expression);
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
 
@@ -239,6 +267,16 @@ export const requisitions = pgTable(
     visaRequirements: jsonb("visa_requirements").$type<string[]>().notNull().default([]),
     description: text("description").notNull().default(""),
     requirements: jsonb("requirements").$type<string[]>().notNull().default([]),
+    /** Weighted search index, maintained by Postgres. See `server/search.ts`. */
+    searchVector: searchVector(sql`
+      setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+      setweight(to_tsvector('english', coalesce(code, '')), 'A') ||
+      setweight(to_tsvector('english', coalesce(department, '')), 'B') ||
+      setweight(to_tsvector('english', coalesce(required_skills::text, '')), 'B') ||
+      setweight(to_tsvector('english', coalesce(preferred_skills::text, '')), 'C') ||
+      setweight(to_tsvector('english', coalesce(location, '')), 'C') ||
+      setweight(to_tsvector('english', coalesce(description, '')), 'D')
+    `),
     openedAt: text("opened_at").notNull(),
     targetFillDate: text("target_fill_date"),
     closedAt: text("closed_at"),
@@ -252,6 +290,7 @@ export const requisitions = pgTable(
     index("req_client_idx").on(t.clientId),
     index("req_recruiter_idx").on(t.leadRecruiterId),
     index("req_deleted_idx").on(t.deletedAt),
+    index("req_search_idx").using("gin", t.searchVector),
   ],
 );
 
@@ -329,6 +368,18 @@ export const candidates = pgTable(
      * be able to show that a request was honoured, and "this row is empty"
      * is not evidence of anything.
      */
+    /** Weighted search index, maintained by Postgres. See `server/search.ts`. */
+    searchVector: searchVector(sql`
+      setweight(to_tsvector('english', coalesce(first_name, '') || ' ' || coalesce(last_name, '')), 'A') ||
+      setweight(to_tsvector('english', coalesce(current_title, '')), 'A') ||
+      setweight(to_tsvector('english', coalesce(current_company, '')), 'B') ||
+      setweight(to_tsvector('english', coalesce(primary_technology, '')), 'B') ||
+      setweight(to_tsvector('english', coalesce(skills::text, '')), 'B') ||
+      setweight(to_tsvector('english', coalesce(email, '')), 'C') ||
+      setweight(to_tsvector('english', coalesce(location, '')), 'C') ||
+      setweight(to_tsvector('english', coalesce(tags::text, '')), 'C') ||
+      setweight(to_tsvector('english', coalesce(summary, '')), 'D')
+    `),
     erasedAt: timestamp("erased_at", { withTimezone: true }),
     erasedBy: text("erased_by"),
     /** "request" (the person asked) or "retention" (the policy expired). */
@@ -351,6 +402,10 @@ export const candidates = pgTable(
     index("cand_status_idx").on(t.status),
     index("cand_deleted_idx").on(t.deletedAt),
     index("cand_erased_idx").on(t.erasedAt),
+    index("cand_search_idx").using("gin", t.searchVector),
+    // The skill facet filters on the jsonb array directly, which a GIN index
+    // over the document serves far better than a scan.
+    index("cand_skills_idx").using("gin", t.skills),
   ],
 );
 

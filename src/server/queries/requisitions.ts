@@ -32,6 +32,7 @@ import { daysBetween } from "@/lib/utils";
 import type { User } from "@/db/schema";
 import { requisitionScope, visibleRequisitionIds } from "@/server/authz";
 import { loadPipeline } from "@/server/pipeline";
+import { matches } from "@/server/search";
 import { listAttachments } from "@/server/queries/attachments";
 
 export interface RequisitionFilters {
@@ -173,17 +174,19 @@ async function loadRequisitions(
     conditions.push(inArray(requisitions.id, filters.ids));
   }
 
+  /*
+   * Full-text against the generated vector (§22).
+   *
+   * The client's name is the one thing not in it: the vector is a function of
+   * the requisition row alone, and reaching across the join to build it would
+   * mean a trigger on `clients` that reindexed every requirement whenever an
+   * account was renamed. Matching it separately costs one comparison against
+   * a few dozen clients and keeps the index honest.
+   */
   if (filters.q) {
-    const term = `%${filters.q.toLowerCase()}%`;
-    conditions.push(
-      or(
-        like(sql`lower(${requisitions.title})`, term),
-        like(sql`lower(${requisitions.code})`, term),
-        like(sql`lower(${requisitions.location})`, term),
-        like(sql`lower(${requisitions.department})`, term),
-        like(sql`lower(${clients.name})`, term),
-      ),
-    );
+    const textMatch = matches(requisitions.searchVector, filters.q);
+    const clientMatch = like(sql`lower(${clients.name})`, `%${filters.q.toLowerCase()}%`);
+    conditions.push(textMatch ? or(textMatch, clientMatch)! : clientMatch);
   }
   // The four derived statuses are not columns, so they cannot be filtered in
   // SQL — they are applied against `displayStatus` once the counts are in.
