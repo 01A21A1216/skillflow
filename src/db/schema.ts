@@ -567,6 +567,15 @@ export const interviews = pgTable(
       .references(() => users.id),
     /** When every scorecard was due. Set from the SLA when the round completes. */
     feedbackDueAt: timestamp("feedback_due_at", { withTimezone: true }),
+    /**
+     * The calendar provider's own id for this booking (§22).
+     *
+     * Null when no provider is configured, which is the default. It is stored
+     * rather than derived because updating or cancelling an invite needs the
+     * provider's handle, and reconstructing one from our id would assume a
+     * particular provider's id scheme — exactly what the port exists to avoid.
+     */
+    calendarEventId: text("calendar_event_id"),
     agenda: text("agenda"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

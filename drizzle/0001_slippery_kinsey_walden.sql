@@ -1,0 +1,1 @@
+ALTER TABLE "interviews" ADD COLUMN "calendar_event_id" text;

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { KanbanSquare, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { KanbanSquare, Plug, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -14,6 +14,7 @@ import {
   StageRowActions,
   type StageRow,
 } from "@/components/domain/forms/stage-form";
+import { integrationStatus } from "@/server/integrations/ports";
 import { listStageRows } from "@/server/pipeline";
 import { listScorecards } from "@/server/queries/scorecards";
 import { permissionMatrixView } from "@/server/queries/people";
@@ -38,6 +39,7 @@ export default async function SettingsPage() {
   const stages = await listStageRows();
   const scorecards = await listScorecards();
   const matrix = await permissionMatrixView();
+  const integrations = integrationStatus();
 
   // How many people are standing in each stage, so a delete can be refused with
   // a reason rather than stranding them somewhere nothing renders.
@@ -252,6 +254,42 @@ export default async function SettingsPage() {
             </code>{" "}
             and re-seeded. The rows above are read from the database, which is the runtime
             authority either way.
+          </p>
+        </Card>
+        <Card padded={false}>
+          <div className="p-5 pb-4">
+            <CardHeader
+              icon={<Plug className="size-4" />}
+              title="Outbound integrations"
+              description="Where this workspace reaches outside itself. Nothing is configured, and the application is correct without any of it."
+            />
+          </div>
+          <ul className="divide-y divide-[hsl(var(--border))] border-t border-border-base">
+            {integrations.map((i) => (
+              <li key={i.key} className="flex flex-wrap items-start gap-x-4 gap-y-1.5 px-5 py-3.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13.5px] font-medium text-content">{i.label}</p>
+                  <p className="mt-0.5 text-[12px] leading-relaxed text-content-subtle">
+                    {i.purpose}
+                  </p>
+                </div>
+                {i.provider === "none" ? (
+                  <Badge tone="neutral" size="sm" variant="outline">
+                    not connected
+                  </Badge>
+                ) : (
+                  <Badge tone="emerald" size="sm">
+                    {i.provider}
+                  </Badge>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="border-t border-border-base px-5 py-3 text-[12px] leading-relaxed text-content-subtle">
+            Each of these is an interface with a no-op default, so scheduling an interview or
+            opening a requirement already calls the right seam and simply sends nothing. A
+            provider is added in one file. Until then the application says so rather than
+            pretending an invite went out &mdash; the in-app record is the one it guarantees.
           </p>
         </Card>
       </PageBody>

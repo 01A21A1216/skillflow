@@ -23,6 +23,7 @@ import {
   type InterviewType,
 } from "@/lib/domain";
 import { loadPipeline } from "@/server/pipeline";
+import { interviewBooked, interviewChanged } from "@/server/integrations/outbound";
 import { notify } from "@/server/notify";
 import { nextInterviewStage, settleOutcome } from "@/server/rules";
 import {
@@ -228,6 +229,10 @@ async function scheduleInterviewImpl(actor: User, formData: FormData): Promise<A
     dedupeKey: `interview_scheduled:${id}`,
   });
 
+  // Panel calendars, if a provider is configured (§22). Deliberately after the
+  // notification: the in-app record is the one this application guarantees.
+  await interviewBooked(id);
+
   revalidatePath("/interviews");
   revalidatePath("/pipeline");
   revalidatePath("/");
@@ -333,6 +338,8 @@ async function updateInterviewOutcomeImpl(actor: User, formData: FormData): Prom
       dedupeKey: `interview_changed:${interviewId}:${status}`,
     });
   }
+
+  await interviewChanged(interviewId, status);
 
   revalidatePath("/interviews");
   revalidatePath("/");

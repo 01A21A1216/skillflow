@@ -5,6 +5,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { notifications, users } from "@/db/schema";
+import { sendEmail } from "@/server/integrations/outbound";
 
 /**
  * Notifications (§14).
@@ -104,7 +105,54 @@ const inApp: Transport = {
   },
 };
 
-const transports: Transport[] = [inApp];
+/**
+ * The same notification, out of the building.
+ *
+ * Not everything belongs in a mailbox. A person who is in the application all
+ * day does not need an email telling them what the bell already shows; what
+ * earns an email is the subset that has a clock on it or that someone needs
+ * to act on while they are elsewhere. Sending all fourteen would train people
+ * to filter the lot, which costs more than it delivers.
+ *
+ * With no provider configured this sends nothing and says so once per
+ * delivery in the log — see `integrations/ports.ts` for why the seam exists
+ * before the provider does.
+ */
+const EMAIL_WORTHY = new Set<NotificationType>([
+  "requirement_assigned",
+  "interview_scheduled",
+  "interview_changed",
+  "feedback_overdue",
+  "offer_created",
+  "mention",
+]);
+
+const outboundEmail: Transport = {
+  name: "email",
+  async deliver(notification, recipients) {
+    if (!EMAIL_WORTHY.has(notification.type)) return;
+
+    const people = await db
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(inArray(users.id, recipients));
+
+    for (const person of people) {
+      // One message per person, keyed per person, so a retry cannot reach
+      // anyone twice and a bounce for one recipient is not a bounce for all.
+      await sendEmail({
+        idempotencyKey: `${notification.dedupeKey}:${person.id}`,
+        to: [person.email],
+        subject: notification.title,
+        body: [notification.body, notification.href && `Open: ${notification.href}`]
+          .filter(Boolean)
+          .join("\n\n"),
+      });
+    }
+  },
+};
+
+const transports: Transport[] = [inApp, outboundEmail];
 
 /**
  * Tell people something happened.

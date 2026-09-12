@@ -57,7 +57,7 @@ far cheaper now than after another dozen features land on the tables.
 | 0.5 | **Audit schema with old/new values** | §13, §20 | ✅ | M | Done — `activities.changes` is a jsonb array of `{field, label, from, to}`, diffed against the stored row so an unchanged save is recorded as such rather than claiming an edit. |
 | 0.6 | **Soft delete + `createdBy` / `updatedBy`** | §20 | ✅ | M | Done — `createdBy`, `updatedBy`, `deletedAt`, `deletedBy` and `rowVersion` on all eight business tables in one migration. Verified: a soft-deleted candidate leaves reads, keeps its submissions, and restores cleanly. No delete UI yet. |
 | 0.7 | **Optimistic concurrency** | §20 | ✅ | M | Done — `rowVersion` compare-and-swap in the action layer, surfaced as a distinct "someone else saved first" prompt with a reload action. Verified end to end: a stale save is refused and the first editor's value survives. |
-| 0.8 | **Object storage for resumes/attachments** | §22, §23 | ❌ | M | Needs signed, permission-checked URLs — candidate PII must not be served from a guessable path. |
+| 0.8 | **Object storage for resumes/attachments** | §22, §23 | ✅ | M | Done alongside 1.8 — an `AttachmentStore` port with a local-disk default, type and size checks at upload, and a permission-checked download route rather than a guessable path. Swapping in S3 is one implementation of the interface. |
 
 > **Sequencing note.** 0.1–0.3 gate the AI assistant (§15 explicitly requires it to respect
 > user permissions), so AI cannot start before RBAC lands.
@@ -146,7 +146,7 @@ Blocked on Phase 0. Two risks below are not schedule risks — they are design c
 | 4.1 | **Real-time multi-user updates** | §1 | ❌ | L | "All updates must immediately appear for other authorized users." Today mutations revalidate only for the actor. Needs a transport (SSE or WebSocket) plus Postgres LISTEN/NOTIFY — depends on 0.4. |
 | 4.2 | **Background jobs** | §22 | ❌ | M | Notification fan-out, resume parsing, AI matching, SLA sweeps. |
 | 4.3 | **Search indexing** | §22 | ❌ | M | Current search is `LIKE` over the full table; fine at 1,300 candidates, not at 100k. |
-| 4.4 | **Integration abstraction layer** | §22 | ❌ | M | Ports for calendar, email, job boards so no provider is hard-coded — cheap to define now, expensive to retrofit. |
+| 4.4 | **Integration abstraction layer** | §22 | ✅ | M | Done — `CalendarPort`, `EmailPort` and `JobBoardPort`, each with a no-op default that declines honestly rather than reporting a phantom send. Call sites go through `integrations/outbound.ts` and pass an id, never a payload: booking an interview syncs the panel's calendars, a status change updates or cancels it, opening a requirement publishes it, and email is a second notification transport. `interviews.calendarEventId` stores the provider's handle so cancel is implementable, not hypothetical. Settings reports what is connected. |
 | 4.5 | **Multi-tenancy / data isolation** | §23 | ❌ | XL | Only if multi-company is actually in scope — see open questions. |
 
 ---

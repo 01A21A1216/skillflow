@@ -9,8 +9,9 @@ import type { User } from "@/db/schema";
 import { REQ_STATUS, type ReqStatus } from "@/lib/domain";
 import { requisitionSchema, requisitionStatusSchema } from "@/lib/validation";
 import { canTouchRequisition } from "@/server/authz";
-import { notify } from "@/server/notify";
+import { requisitionClosed, requisitionPublished } from "@/server/integrations/outbound";
 import { checkVersion, describeChanges, diffFields, stamp, stampNew } from "@/server/integrity";
+import { notify } from "@/server/notify";
 import {
   denied,
   fail,
@@ -229,6 +230,16 @@ async function changeRequisitionStatusImpl(actor: User, formData: FormData): Pro
     ],
     meta: { from: existing.status, to: status, reason: reason ?? null },
   });
+
+  // Job boards, if a provider is configured (§22). Only the two transitions
+  // that change whether the role is publicly open — the derived statuses
+  // (Active Sourcing, Interviewing, …) describe internal progress and would
+  // republish an unchanged advert every time a candidate moved.
+  if (status === "open") {
+    await requisitionPublished(requisitionId);
+  } else if (closing || status === "on_hold") {
+    await requisitionClosed(requisitionId);
+  }
 
   revalidatePath(`/requisitions/${requisitionId}`);
   revalidatePath("/requisitions");
